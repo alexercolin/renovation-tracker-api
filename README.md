@@ -139,6 +139,43 @@ catches up after a disconnect; `last`/`before` walks backward from the newest me
 50 messages by default and at most 100; asking for more is a `VALIDATION` error rather than a
 silent cut.
 
+### Reports
+
+A contractor can export a full PDF report of a job. Reports can be large, so generation is
+asynchronous:
+
+1. `requestReport(jobId)` inserts a `reports` row with status `PENDING`, commits, and sends the
+   report id to the SQS queue. If the queue is unreachable the row is marked `FAILED` with the
+   reason and returned as such, so the client can simply request again.
+2. The worker (`pnpm dev:worker`, or the `worker` Compose service) long-polls the queue. For each
+   message it marks the report `PROCESSING`, streams the PDF straight into S3 with a multipart
+   upload while it reads messages from Postgres in batches of 500, then marks it `COMPLETED`.
+3. The client polls `report(id)`. Once `COMPLETED`, `downloadUrl` carries a presigned S3 URL valid
+   for 15 minutes; it is generated on each read, never stored.
+
+```bash
+curl -s http://localhost:4000/graphql \
+  -H 'content-type: application/json' \
+  -H "authorization: Bearer $TOKEN" \
+  -d "{ \"query\": \"mutation { requestReport(jobId: \\\"$JOB_ID\\\") { id status } }\" }"
+```
+
+```bash
+REPORT_ID=...  # from the requestReport response
+curl -s http://localhost:4000/graphql \
+  -H 'content-type: application/json' \
+  -H "authorization: Bearer $TOKEN" \
+  -d "{ \"query\": \"{ report(id: \\\"$REPORT_ID\\\") { status attempts error downloadUrl } }\" }"
+```
+
+Failure handling: a failed attempt records the error, puts the report back to `PENDING` and leaves
+the message on the queue, so SQS redelivers it after the visibility timeout. The third failure
+marks the report `FAILED` and SQS moves the message to the `reports-dlq` dead letter queue, since
+both limits are three. A worker that crashes mid-generation leaves the row in `PROCESSING`; the
+redelivered message picks it up again. Processing is idempotent: a message for a report that is
+already `COMPLETED` or `FAILED` is acknowledged without work. Only the contractor who owns the job
+can request or read its reports.
+
 Errors come back in the standard GraphQL `errors` array with a stable `extensions.code`:
 
 | Code              | Meaning                                                                             |
@@ -175,12 +212,13 @@ src/
   config/         Environment validation (zod)
   db/             Drizzle client, schema and migration runner
   graphql/        Pothos builder, context and schema assembly
-  infra/          Queue, storage and pubsub adapters behind interfaces
+  infra/          Queue (SQS), storage (S3) and PDF adapters behind interfaces, with in-memory doubles
   modules/        Feature modules: graphql + service + repository each
     users/        User type, me query
     auth/         Login mutation, JWT issue and verification
     jobs/         Job CRUD, soft delete, homeowners, optimistic locking
     messages/     Chat log: sendMessage and the job.messages connection
+    reports/      requestReport, report query, worker loop and PDF pipeline
   shared/         Cross-cutting helpers (errors, ids)
 tests/            Integration tests against real Postgres and LocalStack
 docs/             GraphQL examples and design notes

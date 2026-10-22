@@ -163,3 +163,27 @@ query LatestMessages($jobId: ID!) {
     }
   }
 }
+
+mutation RequestReport($jobId: ID!) {
+  requestReport(jobId: $jobId) {
+    id
+    status
+    createdAt
+  }
+}
+
+query Report($id: ID!) {
+  report(id: $id) {
+    id
+    status
+    attempts
+    error
+    downloadUrl
+    startedAt
+    completedAt
+    job {
+      id
+      description
+    }
+  }
+}

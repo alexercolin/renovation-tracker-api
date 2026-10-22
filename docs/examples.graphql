@@ -243,3 +243,25 @@ mutation RedoJobChange($jobId: ID!) {
     canRedo
   }
 }
+
+subscription MessageAdded($jobId: ID!) {
+  messageAdded(jobId: $jobId) {
+    id
+    body
+    createdAt
+    sender {
+      name
+      role
+    }
+  }
+}
+
+subscription ReportUpdated($reportId: ID!) {
+  reportUpdated(reportId: $reportId) {
+    id
+    status
+    attempts
+    error
+    downloadUrl
+  }
+}

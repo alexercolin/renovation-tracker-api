@@ -58,3 +58,16 @@ builder.mutationField('requestReport', (t) =>
       ctx.services.reports.requestReport(requireCurrentUser(ctx), args.jobId),
   }),
 );
+
+builder.subscriptionField('reportUpdated', (t) =>
+  t.field({
+    type: ReportRef,
+    description:
+      'Fires on every status change of a report you requested, until it is COMPLETED or FAILED.',
+    authScopes: { contractor: true },
+    args: { reportId: t.arg.id() },
+    subscribe: (_root, args, ctx) =>
+      ctx.services.reports.subscribeToReport(requireCurrentUser(ctx), args.reportId),
+    resolve: (event, _args, ctx) => ctx.services.reports.getReportById(event.reportId),
+  }),
+);

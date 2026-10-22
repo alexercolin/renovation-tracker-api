@@ -4,8 +4,8 @@ Backend for a tool where contractors and homeowners collaborate on renovation jo
 job CRUD with homeowners, a chat-like message log, asynchronous PDF report export,
 a full change history with undo/redo, and real-time messaging.
 
-Status: core features and job history with undo/redo are complete. Real-time messaging arrives
-with the second pull request.
+Status: all features are complete, including job history with undo/redo and real-time
+messaging over GraphQL subscriptions.
 
 ## Stack
 
@@ -20,15 +20,15 @@ with the second pull request.
 One package, two processes, one composition root.
 
 ```
-client ── HTTP ──▶ api: Fastify + GraphQL Yoga
-                     │  Pothos schema (modules/*/*.graphql.ts): arguments in, service call, result out
-                     ▼
-                   services: validation, business rules, transactions, ownership checks
-                     │
-                     ▼
-                   repositories: SQL through Drizzle ──▶ PostgreSQL
-                     │
-   requestReport ────┴──▶ SQS ──▶ worker (same container, same services) ──▶ PDF ──▶ S3
+client ── HTTP / WebSocket ──▶ api: Fastify + GraphQL Yoga (+ graphql-ws)
+                                 │  Pothos schema (modules/*/*.graphql.ts): arguments in, service call, result out
+                                 ▼
+                               services: validation, business rules, transactions, ownership checks
+                                 │                                  │
+                                 ▼                                  ▼
+                               repositories: Drizzle ──▶ PostgreSQL  Redis PubSub ──▶ subscriptions
+                                 │                                  ▲
+   requestReport ────────────────┴──▶ SQS ──▶ worker (same container) ──▶ PDF ──▶ S3
 ```
 
 - **Request path.** A GraphQL field never holds logic: it reads its arguments, calls a service and
@@ -45,9 +45,14 @@ client ── HTTP ──▶ api: Fastify + GraphQL Yoga
   tests. Modules never import the AWS SDK.
 - **Per-request DataLoaders** batch the lookups behind `Job.contractor`, `Job.homeowners`,
   `Message.sender` and `Message.job`, so a list of jobs costs a constant number of queries.
+- **Real time.** GraphQL subscriptions run over WebSocket with the graphql-ws protocol on the
+  same `/graphql` endpoint. Services publish thin events (`{ messageId }`, `{ reportId }`) to a
+  Redis-backed PubSub after writing to Postgres, so the worker can notify API subscribers and
+  several API instances share the same stream; resolvers load the fresh row on delivery.
 - **Modules.** `users` (identity), `auth` (login and JWT), `jobs` (CRUD, soft delete,
-  homeowners, optimistic locking), `messages` (chat log with keyset pagination), `reports`
-  (asynchronous PDF pipeline and the worker loop).
+  homeowners, optimistic locking), `messages` (chat log with keyset pagination and the
+  `messageAdded` subscription), `history` (append-only timeline, undo and redo), `reports`
+  (asynchronous PDF pipeline, the worker loop and the `reportUpdated` subscription).
 
 ## Quick start
 
@@ -173,6 +178,35 @@ stays correct while new messages arrive. `first`/`after` walks forward, which is
 catches up after a disconnect; `last`/`before` walks backward from the newest message. Pages hold
 50 messages by default and at most 100; asking for more is a `VALIDATION` error rather than a
 silent cut.
+
+### Real-time messaging
+
+Two subscriptions are available over WebSocket at `ws://localhost:4000/graphql` using the
+graphql-ws protocol, which is what Apollo Client, urql and Relay speak. Because browsers cannot
+set headers on a WebSocket, the token travels in the connection parameters:
+
+```json
+{ "authorization": "Bearer <token>" }
+```
+
+- `messageAdded(jobId)` fires for every new message on a job the caller belongs to. A homeowner
+  who is not a member, or anyone else, gets `NOT_FOUND` when subscribing.
+- `reportUpdated(reportId)` fires on every status change of a report the caller requested:
+  `PROCESSING`, then `COMPLETED` with a `downloadUrl`, or `PENDING` and `FAILED` on retries.
+
+GraphiQL at `http://localhost:4000/graphql` runs subscriptions too, so the quickest demo is to
+open two tabs, subscribe in one and post a message in the other. The same subscriptions also
+work over Server-Sent Events, which Yoga serves on the same endpoint, handy for curl:
+
+```bash
+curl -N http://localhost:4000/graphql \
+  -H 'accept: text/event-stream' \
+  -H "authorization: Bearer $TOKEN" \
+  -G --data-urlencode "query=subscription { messageAdded(jobId: \"$JOB_ID\") { body sender { name } } }"
+```
+
+A subscription is a notification, not a store. If a client disconnects, it reconnects and asks
+`job.messages(after: <last cursor>)` for whatever it missed; Postgres is the source of truth.
 
 ### History, undo and redo
 
@@ -310,6 +344,7 @@ src/
     messages/     Chat log: sendMessage and the job.messages connection
     reports/      requestReport, report query, worker loop and PDF pipeline
     history/      Append-only job timeline, undo and redo
+  infra/pubsub/   Redis-backed PubSub for subscriptions, with an in-memory twin
   shared/         Cross-cutting helpers (errors, ids)
 tests/            Integration tests against real Postgres and LocalStack
 docs/             GraphQL examples and design notes
@@ -356,6 +391,22 @@ docs/             GraphQL examples and design notes
 - `before`/`after` values are stored as JSON, so dates travel as ISO strings and the location is
   one composite value. Comparisons for the integrity check normalise both sides first.
 
+**Real time**
+
+- Delivery is at-most-once: an event published while a client is disconnected is not replayed.
+  The keyset cursor on `job.messages` exists precisely so a client can catch up after
+  reconnecting. Durable per-client delivery would need an inbox table and offsets, which is a
+  different product.
+- Events carry only an id. The resolver loads the row when it delivers, so clients never see a
+  payload that is stale or shaped differently after a Redis round trip, at the cost of one query
+  per event per subscriber.
+- Redis is required at boot for both processes. The in-memory PubSub used by the unit tests would
+  also work for a single API instance without a worker, but it would silently stop report events
+  from reaching the API, so it is not offered as a configuration.
+- The WebSocket handshake accepts the token in connection parameters; a bad token fails the
+  subscription with `UNAUTHENTICATED` rather than closing the socket, so one bad operation does
+  not tear down a connection that carries others.
+
 **Messages**
 
 - Cursors carry the message id, and the database resolves the position with a subselect over
@@ -398,7 +449,9 @@ call; `docs/decisions.md` records the outcomes. Implementation then went module 
 assistant wrote code and tests, I reviewed each module before it was committed, and every module
 had to pass lint, typecheck and both test suites locally before the next one started.
 
-## Next steps
+## With more time
 
-- Real-time messaging: GraphQL subscriptions over WebSocket with Redis as the PubSub between
-  the API and the worker.
+- A transactional outbox so the report row and its queue message cannot drift apart.
+- Extending the SQS visibility timeout while a long report is generating.
+- Sub-tasks and sub-contractors as further modules on the same pattern.
+- Durable, per-client event delivery for clients that cannot afford to miss a message.

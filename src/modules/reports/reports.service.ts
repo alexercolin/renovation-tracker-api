@@ -6,6 +6,7 @@ import {
   type ReportMessage,
   type ReportWriter,
 } from '../../infra/pdf/report-pdf.js';
+import { type RealtimePubSub, type ReportUpdatedEvent } from '../../infra/pubsub/pubsub.js';
 import { type MessageQueue } from '../../infra/queue/queue.js';
 import { type ObjectStorage } from '../../infra/storage/storage.js';
 import { type Actor } from '../../shared/actor.js';
@@ -37,6 +38,7 @@ export interface ReportsServiceDeps {
   queue: MessageQueue;
   storage: ObjectStorage;
   writer: ReportWriter;
+  pubsub: RealtimePubSub;
 }
 
 export class ReportsService {
@@ -55,14 +57,25 @@ export class ReportsService {
     const message: ReportQueueMessage = { reportId: row.id };
     try {
       await this.deps.queue.send(JSON.stringify(message));
-      return toReport(row);
+      return this.notify(toReport(row));
     } catch (error) {
       const failed = await this.deps.reportsRepository.update(this.deps.db, row.id, {
         status: 'FAILED',
         error: `Could not enqueue report: ${errorMessage(error)}`,
       });
-      return toReport(failed);
+      return this.notify(toReport(failed));
     }
+  }
+
+  async getReportById(id: string): Promise<Report> {
+    const row = await this.deps.reportsRepository.findById(this.deps.db, id);
+    if (!row) throw new NotFoundError('Report', id);
+    return toReport(row);
+  }
+
+  async subscribeToReport(actor: Actor, id: string): Promise<AsyncIterable<ReportUpdatedEvent>> {
+    const report = await this.getReport(actor, id);
+    return this.deps.pubsub.subscribe('reportUpdated', report.id);
   }
 
   async getReport(actor: Actor, id: string): Promise<Report> {
@@ -87,6 +100,7 @@ export class ReportsService {
     if (existing.status === 'COMPLETED' || existing.status === 'FAILED') return toReport(existing);
 
     const attempt = await this.deps.reportsRepository.startAttempt(this.deps.db, reportId);
+    this.notify(toReport(attempt));
     try {
       const document = await this.buildDocument(attempt.jobId);
       const key = `jobs/${attempt.jobId}/reports/${attempt.id}.pdf`;
@@ -98,15 +112,21 @@ export class ReportsService {
         completedAt: new Date(),
         error: null,
       });
-      return toReport(completed);
+      return this.notify(toReport(completed));
     } catch (error) {
       const exhausted = attempt.attempts >= REPORT_MAX_ATTEMPTS;
-      await this.deps.reportsRepository.update(this.deps.db, reportId, {
+      const failed = await this.deps.reportsRepository.update(this.deps.db, reportId, {
         status: exhausted ? 'FAILED' : 'PENDING',
         error: errorMessage(error),
       });
+      this.notify(toReport(failed));
       throw error;
     }
+  }
+
+  private notify(report: Report): Report {
+    this.deps.pubsub.publish('reportUpdated', report.id, { reportId: report.id });
+    return report;
   }
 
   private async buildDocument(jobId: string): Promise<ReportDocument> {

@@ -170,3 +170,20 @@ run and reset per file.
 **Consequences.** The unit suite runs in under a second and covers rules and edge cases; the
 integration suite proves the SQL, the auth plumbing and the AWS adapters, including a real PDF
 downloaded from S3.
+
+## 15. Real time over graphql-ws with Redis
+
+**Context.** The chosen optional feature is live contractor and homeowner messaging; the worker
+also needs to tell API clients when a report is ready.
+
+**Decision.** GraphQL subscriptions over WebSocket with the graphql-ws protocol, mounted on the
+same `/graphql` route as HTTP; Yoga's SSE transport stays available on that route. Events go
+through a Redis-backed PubSub so the worker and every API instance share one stream. Events are
+thin (an id); resolvers load the row on delivery. The token travels in connection parameters.
+
+**Rejected.** SSE only (no browser header problem either, but a connection limit per origin and
+not the protocol GraphQL clients default to). Socket.io (a second protocol beside GraphQL with
+its own auth). Fat events carrying the full object (serialization drift across Redis).
+
+**Consequences.** One schema and one auth path for everything; at-most-once delivery with
+catch-up through the message cursor; Redis becomes a boot-time dependency of both processes.

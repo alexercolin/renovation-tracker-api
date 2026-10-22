@@ -43,3 +43,4 @@ builder.addScalarType('DateTime', DateTimeResolver);
 builder.addScalarType('JSON', JSONResolver);
 builder.queryType({});
 builder.mutationType({});
+builder.subscriptionType({});

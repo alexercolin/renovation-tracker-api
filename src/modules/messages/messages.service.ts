@@ -1,6 +1,8 @@
 import { type Db } from '../../db/client.js';
+import { type MessageAddedEvent, type RealtimePubSub } from '../../infra/pubsub/pubsub.js';
 import { type Actor } from '../../shared/actor.js';
-import { ConflictError, ValidationError } from '../../shared/errors.js';
+import { ConflictError, NotFoundError, ValidationError } from '../../shared/errors.js';
+import { parseId } from '../../shared/ids.js';
 import { type JobsService } from '../jobs/jobs.service.js';
 import { type MessagesRepository } from './messages.repository.js';
 import {
@@ -15,6 +17,7 @@ export class MessagesService {
     private readonly db: Db,
     private readonly messagesRepository: MessagesRepository,
     private readonly jobsService: JobsService,
+    private readonly pubsub: RealtimePubSub,
   ) {}
 
   async sendMessage(actor: Actor, input: unknown): Promise<Message> {
@@ -31,7 +34,10 @@ export class MessagesService {
       body,
       clientMessageId,
     });
-    if (inserted) return toMessage(inserted);
+    if (inserted) {
+      this.pubsub.publish('messageAdded', job.id, { messageId: inserted.id });
+      return toMessage(inserted);
+    }
 
     const existing = clientMessageId
       ? await this.messagesRepository.findByClientMessageId(this.db, actor.id, clientMessageId)
@@ -43,6 +49,17 @@ export class MessagesService {
       });
     }
     return toMessage(existing);
+  }
+
+  async getMessageById(id: string): Promise<Message> {
+    const row = await this.messagesRepository.findById(this.db, id);
+    if (!row) throw new NotFoundError('Message', id);
+    return toMessage(row);
+  }
+
+  async subscribeToJob(actor: Actor, id: string): Promise<AsyncIterable<MessageAddedEvent>> {
+    const job = await this.jobsService.getJob(actor, parseId(id, 'jobId'));
+    return this.pubsub.subscribe('messageAdded', job.id);
   }
 
   async listJobMessages(jobId: string, page: MessagePageQuery): Promise<Message[]> {

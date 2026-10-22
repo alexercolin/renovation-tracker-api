@@ -1,5 +1,6 @@
 import { type UserRow } from '../db/schema/index.js';
 import { PdfKitReportWriter, type ReportWriter } from '../infra/pdf/report-pdf.js';
+import { createInMemoryPubSub } from '../infra/pubsub/pubsub.js';
 import { InMemoryQueue } from '../infra/queue/in-memory-queue.js';
 import { InMemoryStorage } from '../infra/storage/in-memory-storage.js';
 import { FakeHistoryRepository } from './history/history.repository.fake.js';
@@ -31,11 +32,12 @@ export function createFakeServices({ users = [], writer }: FakeServicesOptions =
 
   const queue = new InMemoryQueue();
   const storage = new InMemoryStorage();
+  const pubsub = createInMemoryPubSub();
 
   const usersService = new UsersService(db, repositories.users);
   const history = new HistoryService(db, repositories.history, repositories.jobs);
   const jobs = new JobsService(db, repositories.jobs, repositories.users, history);
-  const messages = new MessagesService(db, repositories.messages, jobs);
+  const messages = new MessagesService(db, repositories.messages, jobs, pubsub);
   const reportsDeps: ReportsServiceDeps = {
     db,
     reportsRepository: repositories.reports,
@@ -46,6 +48,7 @@ export function createFakeServices({ users = [], writer }: FakeServicesOptions =
     queue,
     storage,
     writer: writer ?? new PdfKitReportWriter(),
+    pubsub,
   };
 
   return {
@@ -53,6 +56,7 @@ export function createFakeServices({ users = [], writer }: FakeServicesOptions =
     repositories,
     queue,
     storage,
+    pubsub,
     reportsDeps,
     services: {
       users: usersService,

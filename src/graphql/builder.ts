@@ -1,7 +1,7 @@
 import SchemaBuilder from '@pothos/core';
 import RelayPlugin from '@pothos/plugin-relay';
 import ScopeAuthPlugin from '@pothos/plugin-scope-auth';
-import { DateTimeResolver } from 'graphql-scalars';
+import { DateTimeResolver, JSONResolver } from 'graphql-scalars';
 
 import { ForbiddenError, UnauthenticatedError } from '../shared/errors.js';
 import { type GraphQLContext } from './context.js';
@@ -13,6 +13,7 @@ export const builder = new SchemaBuilder<{
   Scalars: {
     ID: { Input: string; Output: string };
     DateTime: { Input: Date; Output: Date };
+    JSON: { Input: unknown; Output: unknown };
   };
   AuthScopes: {
     authenticated: boolean;
@@ -39,5 +40,6 @@ export const builder = new SchemaBuilder<{
 });
 
 builder.addScalarType('DateTime', DateTimeResolver);
+builder.addScalarType('JSON', JSONResolver);
 builder.queryType({});
 builder.mutationType({});

@@ -4,8 +4,8 @@ Backend for a tool where contractors and homeowners collaborate on renovation jo
 job CRUD with homeowners, a chat-like message log, asynchronous PDF report export,
 a full change history with undo/redo, and real-time messaging.
 
-Status: the core features are complete. Job history with undo/redo and real-time messaging
-arrive in the second pull request.
+Status: core features and job history with undo/redo are complete. Real-time messaging arrives
+with the second pull request.
 
 ## Stack
 
@@ -174,6 +174,47 @@ catches up after a disconnect; `last`/`before` walks backward from the newest me
 50 messages by default and at most 100; asking for more is a `VALIDATION` error rather than a
 silent cut.
 
+### History, undo and redo
+
+Every change to a job is recorded in `job_history`, an append-only table enforced by a database
+trigger. Each entry holds the kind of change, who made it, when, and the fields it touched with
+their values before and after. Contractors and homeowners read the timeline through
+`job.history`, a Relay connection ordered by `seq`; only contractors can undo and redo.
+
+```bash
+curl -s http://localhost:4000/graphql \
+  -H 'content-type: application/json' \
+  -H "authorization: Bearer $TOKEN" \
+  -d "{ \"query\": \"{ job(id: \\\"$JOB_ID\\\") { version canUndo canRedo history(first: 20) { edges { node { seq kind targetSeq supersededAt actor { name } changes { field before after } } } } } }\" }"
+```
+
+```bash
+curl -s http://localhost:4000/graphql \
+  -H 'content-type: application/json' \
+  -H "authorization: Bearer $TOKEN" \
+  -d "{ \"query\": \"mutation { undoJobChange(jobId: \\\"$JOB_ID\\\") { costCents status deletedAt version canUndo canRedo } }\" }"
+```
+
+How it works:
+
+- `UPDATED` and `DELETED` entries are the undo stack. `jobs.history_cursor` points at the last
+  applied one; `CREATED`, `HOMEOWNER_ADDED` and `HOMEOWNER_REMOVED` are in the timeline but are
+  never undone.
+- **Undo** locks the job row, takes the entry at the cursor, checks that every field still holds
+  the recorded `after` value, writes the `before` values, moves the cursor to the previous
+  undoable entry and appends an `UNDONE` entry pointing at what it reverted. Undoing a `DELETED`
+  entry restores the job.
+- **Redo** does the mirror image with the first undoable entry above the cursor and appends
+  `REDONE`.
+- A new edit while redo is available marks the discarded entries with `supersededAt` instead of
+  deleting them, so the audit trail stays complete; `canRedo` turns false.
+- Undo and redo bump `version` like any other change and accept `expectedVersion`, so two
+  contractors cannot undo past each other without noticing. Nothing to undo or redo is a
+  `CONFLICT`.
+- The trigger rejects every `UPDATE` and `DELETE` on `job_history` except setting `supersededAt`
+  once. If an undo ever finds a value that does not match what was recorded, it aborts the
+  transaction instead of writing, which is the integrity guarantee the design rests on.
+
 ### Reports
 
 A contractor can export a full PDF report of a job. Reports can be large, so generation is
@@ -184,7 +225,8 @@ asynchronous:
    reason and returned as such, so the client can simply request again.
 2. The worker (`pnpm dev:worker`, or the `worker` Compose service) long-polls the queue. For each
    message it marks the report `PROCESSING`, streams the PDF straight into S3 with a multipart
-   upload while it reads messages from Postgres in batches of 500, then marks it `COMPLETED`.
+   upload while it reads the history and the messages from Postgres in batches of 500, then marks
+   it `COMPLETED`. The PDF covers the job, the people, the full timeline and the chat log.
 3. The client polls `report(id)`. Once `COMPLETED`, `downloadUrl` carries a presigned S3 URL valid
    for 15 minutes; it is generated on each read, never stored.
 
@@ -267,6 +309,7 @@ src/
     jobs/         Job CRUD, soft delete, homeowners, optimistic locking
     messages/     Chat log: sendMessage and the job.messages connection
     reports/      requestReport, report query, worker loop and PDF pipeline
+    history/      Append-only job timeline, undo and redo
   shared/         Cross-cutting helpers (errors, ids)
 tests/            Integration tests against real Postgres and LocalStack
 docs/             GraphQL examples and design notes
@@ -292,13 +335,26 @@ docs/             GraphQL examples and design notes
 - `expectedVersion` is optional. Clients that send it get `CONFLICT` on lost updates; clients
   that omit it get last write wins. A no-op update and a homeowner change do not bump the version,
   because the version protects the job's own fields.
-- Deleting a job is a soft delete that freezes it: every mutation answers `CONFLICT`. Undo in
-  the next pull request is how a deleted job comes back.
+- Deleting a job is a soft delete that freezes it: every mutation answers `CONFLICT`. Undo is how
+  a deleted job comes back.
 - Errors are standard GraphQL errors with a stable `extensions.code`, rather than union result
   types per mutation. Examples stay short and every client understands them; the price is that
   error shapes are not part of the schema.
 - Relay connections are used only for lists that grow without bound (messages, and history
   later). A contractor's jobs and a job's homeowners are plain arrays.
+
+**History**
+
+- Undo is strictly linear, last applied change first. Reverting an arbitrary older entry is
+  deliberately unsupported: because undo always targets the top of the stack, the current state
+  is guaranteed to equal the recorded `after` value, which is what makes the integrity check
+  possible. Selective revert would need per-field conflict rules.
+- A new edit discards the redo stack, as editors do, by marking entries superseded; the
+  alternative of a branching history was rejected as hard to expose and explain.
+- Creation and homeowner membership are recorded but not undoable; a job cannot be un-created,
+  and membership is managed explicitly.
+- `before`/`after` values are stored as JSON, so dates travel as ISO strings and the location is
+  one composite value. Comparisons for the integrity check normalise both sides first.
 
 **Messages**
 
@@ -342,9 +398,7 @@ call; `docs/decisions.md` records the outcomes. Implementation then went module 
 assistant wrote code and tests, I reviewed each module before it was committed, and every module
 had to pass lint, typecheck and both test suites locally before the next one started.
 
-## Next pull request
+## Next steps
 
-- Job history: an append-only change log with before/after values per field, and linear
-  undo/redo for contractors with a cursor on the job row.
 - Real-time messaging: GraphQL subscriptions over WebSocket with Redis as the PubSub between
   the API and the worker.

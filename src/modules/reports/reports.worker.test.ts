@@ -3,17 +3,11 @@ import { Readable } from 'node:stream';
 import pino from 'pino';
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { PdfKitReportWriter, type ReportWriter } from '../../infra/pdf/report-pdf.js';
-import { InMemoryQueue } from '../../infra/queue/in-memory-queue.js';
-import { InMemoryStorage } from '../../infra/storage/in-memory-storage.js';
+import { type ReportWriter } from '../../infra/pdf/report-pdf.js';
+import { type InMemoryQueue } from '../../infra/queue/in-memory-queue.js';
 import { type Actor } from '../../shared/actor.js';
-import { fakeDb, FakeJobsRepository } from '../jobs/jobs.repository.fake.js';
-import { JobsService } from '../jobs/jobs.service.js';
-import { FakeMessagesRepository } from '../messages/messages.repository.fake.js';
-import { MessagesService } from '../messages/messages.service.js';
-import { FakeUsersRepository, userRow } from '../users/users.repository.fake.js';
-import { UsersService } from '../users/users.service.js';
-import { FakeReportsRepository } from './reports.repository.fake.js';
+import { createFakeServices } from '../services.fake.js';
+import { userRow } from '../users/users.repository.fake.js';
 import { ReportsService, type ReportsServiceDeps } from './reports.service.js';
 import { handleQueueMessage, pollOnce, type ReportWorkerDeps } from './reports.worker.js';
 
@@ -35,24 +29,14 @@ describe('report worker', () => {
   let jobId: string;
 
   beforeEach(async () => {
-    const usersRepository = new FakeUsersRepository([
-      userRow({ id: alice.id, email: 'alice@contractor.test' }),
-    ]);
-    const jobsService = new JobsService(fakeDb(), new FakeJobsRepository(), usersRepository);
-    queue = new InMemoryQueue();
-    serviceDeps = {
-      db: fakeDb(),
-      reportsRepository: new FakeReportsRepository(),
-      jobsService,
-      usersService: new UsersService(fakeDb(), usersRepository),
-      messagesService: new MessagesService(fakeDb(), new FakeMessagesRepository(), jobsService),
-      queue,
-      storage: new InMemoryStorage(),
-      writer: new PdfKitReportWriter(),
-    };
-    deps = { queue, reports: new ReportsService(serviceDeps), logger: pino({ level: 'silent' }) };
+    const fake = createFakeServices({
+      users: [userRow({ id: alice.id, email: 'alice@contractor.test' })],
+    });
+    queue = fake.queue;
+    serviceDeps = fake.reportsDeps;
+    deps = { queue, reports: fake.services.reports, logger: pino({ level: 'silent' }) };
 
-    const job = await jobsService.createJob(alice, {
+    const job = await fake.services.jobs.createJob(alice, {
       description: 'Deck',
       location: { addressLine1: '1 Main St', city: 'Austin', state: 'TX', postalCode: '78701' },
     });

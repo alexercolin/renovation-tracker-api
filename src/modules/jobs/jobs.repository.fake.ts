@@ -32,6 +32,7 @@ export class FakeJobsRepository implements JobsRepository {
       status: values.status ?? 'PLANNING',
       costCents: values.costCents ?? 0,
       version: values.version ?? 1,
+      historyCursor: values.historyCursor ?? 0,
       deletedAt: values.deletedAt ?? null,
       createdAt: now,
       updatedAt: now,

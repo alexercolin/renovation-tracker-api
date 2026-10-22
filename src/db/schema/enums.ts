@@ -8,7 +8,17 @@ export const reportStatus = pgEnum('report_status', [
   'COMPLETED',
   'FAILED',
 ]);
+export const historyKind = pgEnum('history_kind', [
+  'CREATED',
+  'UPDATED',
+  'DELETED',
+  'UNDONE',
+  'REDONE',
+  'HOMEOWNER_ADDED',
+  'HOMEOWNER_REMOVED',
+]);
 
 export type UserRole = (typeof userRole.enumValues)[number];
 export type JobStatus = (typeof jobStatus.enumValues)[number];
 export type ReportStatus = (typeof reportStatus.enumValues)[number];
+export type HistoryKind = (typeof historyKind.enumValues)[number];

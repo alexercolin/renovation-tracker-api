@@ -63,7 +63,7 @@ export async function createTestApp(): Promise<TestApp> {
     },
     async resetDatabase() {
       await container.db.execute(
-        sql`truncate table reports, messages, job_homeowners, jobs, users restart identity cascade`,
+        sql`truncate table job_history, reports, messages, job_homeowners, jobs, users restart identity cascade`,
       );
       await seedDatabase(container.db);
     },

@@ -2,9 +2,10 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { type Actor } from '../../shared/actor.js';
 import { ConflictError, NotFoundError, ValidationError } from '../../shared/errors.js';
-import { FakeUsersRepository, userRow } from '../users/users.repository.fake.js';
-import { fakeDb, FakeJobsRepository } from './jobs.repository.fake.js';
-import { JobsService } from './jobs.service.js';
+import { createFakeServices } from '../services.fake.js';
+import { userRow } from '../users/users.repository.fake.js';
+import { type FakeJobsRepository } from './jobs.repository.fake.js';
+import { type JobsService } from './jobs.service.js';
 
 const alice: Actor = { id: '019a0000-0000-7000-8000-00000000000a', role: 'CONTRACTOR' };
 const dave: Actor = { id: '019a0000-0000-7000-8000-00000000000d', role: 'CONTRACTOR' };
@@ -20,13 +21,15 @@ describe('JobsService', () => {
   let service: JobsService;
 
   beforeEach(() => {
-    jobsRepository = new FakeJobsRepository();
-    const usersRepository = new FakeUsersRepository([
-      userRow({ id: alice.id, email: 'alice@contractor.test' }),
-      userRow({ id: dave.id, email: 'dave@contractor.test' }),
-      userRow({ id: bob.id, email: 'bob@homeowner.test', role: 'HOMEOWNER' }),
-    ]);
-    service = new JobsService(fakeDb(), jobsRepository, usersRepository);
+    const fake = createFakeServices({
+      users: [
+        userRow({ id: alice.id, email: 'alice@contractor.test' }),
+        userRow({ id: dave.id, email: 'dave@contractor.test' }),
+        userRow({ id: bob.id, email: 'bob@homeowner.test', role: 'HOMEOWNER' }),
+      ],
+    });
+    jobsRepository = fake.repositories.jobs;
+    service = fake.services.jobs;
   });
 
   describe('createJob', () => {

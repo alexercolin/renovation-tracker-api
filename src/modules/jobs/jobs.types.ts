@@ -22,6 +22,7 @@ export interface Job extends JobFields {
   id: string;
   contractorId: string;
   version: number;
+  historyCursor: number;
   deletedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
@@ -43,6 +44,7 @@ export function toJob(row: JobRow): Job {
     status: row.status,
     costCents: row.costCents,
     version: row.version,
+    historyCursor: row.historyCursor,
     deletedAt: row.deletedAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,

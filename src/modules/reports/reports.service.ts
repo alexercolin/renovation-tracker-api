@@ -1,6 +1,8 @@
 import { type Db } from '../../db/client.js';
 import {
+  formatAddress,
   type ReportDocument,
+  type ReportHistoryEntry,
   type ReportMessage,
   type ReportWriter,
 } from '../../infra/pdf/report-pdf.js';
@@ -8,7 +10,10 @@ import { type MessageQueue } from '../../infra/queue/queue.js';
 import { type ObjectStorage } from '../../infra/storage/storage.js';
 import { type Actor } from '../../shared/actor.js';
 import { errorMessage, NotFoundError } from '../../shared/errors.js';
+import { formatUsd } from '../../shared/money.js';
 import { parseId } from '../../shared/ids.js';
+import { type HistoryService } from '../history/history.service.js';
+import { type FieldChange, type HistoryEntry } from '../history/history.types.js';
 import { type JobsService } from '../jobs/jobs.service.js';
 import { type MessagesService } from '../messages/messages.service.js';
 import { type UsersService } from '../users/users.service.js';
@@ -28,6 +33,7 @@ export interface ReportsServiceDeps {
   jobsService: JobsService;
   usersService: UsersService;
   messagesService: MessagesService;
+  historyService: HistoryService;
   queue: MessageQueue;
   storage: ObjectStorage;
   writer: ReportWriter;
@@ -129,8 +135,36 @@ export class ReportsService {
         name: user.name,
         email: user.email,
       })),
+      history: this.iterateHistory(jobId),
       messages: this.iterateMessages(jobId),
     };
+  }
+
+  private async *iterateHistory(jobId: string): AsyncGenerator<ReportHistoryEntry> {
+    let afterSeq: number | undefined;
+    for (;;) {
+      const page = await this.deps.historyService.listJobHistory(jobId, {
+        afterSeq,
+        limit: REPORT_MESSAGE_BATCH_SIZE,
+        inverted: false,
+      });
+      if (page.length === 0) return;
+
+      const actorIds = [...new Set(page.map((entry) => entry.actorId))];
+      const actors = await this.deps.usersService.findManyByIds(actorIds);
+      for (const entry of page) {
+        yield {
+          seq: entry.seq,
+          kind: entry.kind,
+          actorName: actors.get(entry.actorId)?.name ?? 'Unknown user',
+          createdAt: entry.createdAt,
+          details: describeEntry(entry),
+        };
+      }
+
+      if (page.length < REPORT_MESSAGE_BATCH_SIZE) return;
+      afterSeq = page[page.length - 1]!.seq;
+    }
   }
 
   private async *iterateMessages(jobId: string): AsyncGenerator<ReportMessage> {
@@ -157,4 +191,29 @@ export class ReportsService {
       afterId = page[page.length - 1]!.id;
     }
   }
+}
+
+function describeEntry(entry: HistoryEntry): string[] {
+  const lines = entry.changes.map(describeChange);
+  if (entry.targetSeq !== null) lines.unshift(`applies to entry #${entry.targetSeq}`);
+  if (entry.supersededAt) lines.push(`superseded at ${entry.supersededAt.toISOString()}`);
+  return lines;
+}
+
+function describeChange({ field, before, after }: FieldChange): string {
+  if (before === null || before === undefined) return `${field}: ${describeValue(field, after)}`;
+  return `${field}: ${describeValue(field, before)} -> ${describeValue(field, after)}`;
+}
+
+function describeValue(field: string, value: unknown): string {
+  if (value === null || value === undefined) return 'none';
+  if (field === 'costCents' && typeof value === 'number') return formatUsd(value);
+  if (field === 'location' && typeof value === 'object') {
+    return formatAddress(value as Parameters<typeof formatAddress>[0]);
+  }
+  if (field === 'homeowner' && typeof value === 'object') {
+    const person = value as { name?: string; email?: string };
+    return `${person.name ?? 'unknown'} <${person.email ?? 'unknown'}>`;
+  }
+  return typeof value === 'string' ? value : JSON.stringify(value);
 }

@@ -2,11 +2,11 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { type Actor } from '../../shared/actor.js';
 import { ConflictError, NotFoundError, ValidationError } from '../../shared/errors.js';
-import { fakeDb, FakeJobsRepository } from '../jobs/jobs.repository.fake.js';
-import { JobsService } from '../jobs/jobs.service.js';
-import { FakeUsersRepository, userRow } from '../users/users.repository.fake.js';
-import { FakeMessagesRepository } from './messages.repository.fake.js';
-import { MessagesService } from './messages.service.js';
+import { type JobsService } from '../jobs/jobs.service.js';
+import { createFakeServices } from '../services.fake.js';
+import { userRow } from '../users/users.repository.fake.js';
+import { type FakeMessagesRepository } from './messages.repository.fake.js';
+import { type MessagesService } from './messages.service.js';
 
 const alice: Actor = { id: '019a0000-0000-7000-8000-00000000000a', role: 'CONTRACTOR' };
 const dave: Actor = { id: '019a0000-0000-7000-8000-00000000000d', role: 'CONTRACTOR' };
@@ -22,15 +22,17 @@ describe('MessagesService', () => {
   let jobId: string;
 
   beforeEach(async () => {
-    const usersRepository = new FakeUsersRepository([
-      userRow({ id: alice.id, email: 'alice@contractor.test' }),
-      userRow({ id: dave.id, email: 'dave@contractor.test' }),
-      userRow({ id: bob.id, email: 'bob@homeowner.test', role: 'HOMEOWNER' }),
-      userRow({ id: carol.id, email: 'carol@homeowner.test', role: 'HOMEOWNER' }),
-    ]);
-    jobsService = new JobsService(fakeDb(), new FakeJobsRepository(), usersRepository);
-    messagesRepository = new FakeMessagesRepository();
-    service = new MessagesService(fakeDb(), messagesRepository, jobsService);
+    const fake = createFakeServices({
+      users: [
+        userRow({ id: alice.id, email: 'alice@contractor.test' }),
+        userRow({ id: dave.id, email: 'dave@contractor.test' }),
+        userRow({ id: bob.id, email: 'bob@homeowner.test', role: 'HOMEOWNER' }),
+        userRow({ id: carol.id, email: 'carol@homeowner.test', role: 'HOMEOWNER' }),
+      ],
+    });
+    jobsService = fake.services.jobs;
+    messagesRepository = fake.repositories.messages;
+    service = fake.services.messages;
 
     const job = await jobsService.createJob(alice, {
       description: 'Kitchen remodel',

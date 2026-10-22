@@ -9,6 +9,8 @@ import { SqsQueue } from './infra/queue/sqs-queue.js';
 import { S3Storage } from './infra/storage/s3-storage.js';
 import { type ObjectStorage } from './infra/storage/storage.js';
 import { AuthService } from './modules/auth/auth.service.js';
+import { HistoryRepository } from './modules/history/history.repository.js';
+import { HistoryService } from './modules/history/history.service.js';
 import { JobsRepository } from './modules/jobs/jobs.repository.js';
 import { JobsService } from './modules/jobs/jobs.service.js';
 import { MessagesRepository } from './modules/messages/messages.repository.js';
@@ -29,6 +31,7 @@ export interface Container {
     jobs: JobsRepository;
     messages: MessagesRepository;
     reports: ReportsRepository;
+    history: HistoryRepository;
   };
   services: {
     users: UsersService;
@@ -36,6 +39,7 @@ export interface Container {
     jobs: JobsService;
     messages: MessagesService;
     reports: ReportsService;
+    history: HistoryService;
   };
   close(): Promise<void>;
 }
@@ -55,10 +59,12 @@ export function createContainer(env: Env): Container {
     jobs: new JobsRepository(),
     messages: new MessagesRepository(),
     reports: new ReportsRepository(),
+    history: new HistoryRepository(),
   };
 
   const users = new UsersService(db, repositories.users);
-  const jobs = new JobsService(db, repositories.jobs, repositories.users);
+  const history = new HistoryService(db, repositories.history, repositories.jobs);
+  const jobs = new JobsService(db, repositories.jobs, repositories.users, history);
   const messages = new MessagesService(db, repositories.messages, jobs);
   const services = {
     users,
@@ -74,10 +80,12 @@ export function createContainer(env: Env): Container {
       jobsService: jobs,
       usersService: users,
       messagesService: messages,
+      historyService: history,
       queue,
       storage,
       writer: new PdfKitReportWriter(),
     }),
+    history,
   };
 
   return {

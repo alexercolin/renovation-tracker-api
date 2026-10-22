@@ -4,3 +4,4 @@ export * from './jobs.js';
 export * from './job-homeowners.js';
 export * from './messages.js';
 export * from './reports.js';
+export * from './job-history.js';

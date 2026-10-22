@@ -30,6 +30,10 @@ export class FakeMessagesRepository implements MessagesRepository {
     return Promise.resolve(row);
   }
 
+  findById(_db: DbExecutor, id: string): Promise<MessageRow | undefined> {
+    return Promise.resolve(this.rows.find((row) => row.id === id));
+  }
+
   findByClientMessageId(
     _db: DbExecutor,
     senderId: string,

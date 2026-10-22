@@ -9,6 +9,7 @@ export interface Loaders {
   userById: DataLoader<string, User>;
   homeownersByJobId: DataLoader<string, User[]>;
   jobById: DataLoader<string, Job>;
+  canRedoByJobId: DataLoader<string, boolean>;
 }
 
 type Batch<V> = Promise<Array<V | Error>>;
@@ -29,9 +30,15 @@ export function createLoaders(services: Container['services']): Loaders {
     return ids.map((id) => found.get(id) ?? new NotFoundError('Job', id));
   };
 
+  const loadCanRedo = async (jobIds: readonly string[]): Batch<boolean> => {
+    const withRedo = await services.history.jobIdsWithRedo(jobIds);
+    return jobIds.map((jobId) => withRedo.has(jobId));
+  };
+
   return {
     userById: new DataLoader(loadUsers),
     homeownersByJobId: new DataLoader(loadHomeowners),
     jobById: new DataLoader(loadJobs),
+    canRedoByJobId: new DataLoader(loadCanRedo),
   };
 }

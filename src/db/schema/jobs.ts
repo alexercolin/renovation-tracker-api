@@ -22,6 +22,7 @@ export const jobs = pgTable(
     status: jobStatus().notNull().default('PLANNING'),
     costCents: integer().notNull().default(0),
     version: integer().notNull().default(1),
+    historyCursor: integer().notNull().default(0),
     deletedAt: timestamp({ withTimezone: true }),
     ...timestamps,
   },
@@ -29,6 +30,7 @@ export const jobs = pgTable(
     index('jobs_contractor_id_idx').on(table.contractorId),
     check('jobs_cost_cents_non_negative', sql`${table.costCents} >= 0`),
     check('jobs_version_positive', sql`${table.version} >= 1`),
+    check('jobs_history_cursor_non_negative', sql`${table.historyCursor} >= 0`),
   ],
 );
 

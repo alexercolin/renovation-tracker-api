@@ -35,11 +35,20 @@ export interface ReportMessage {
   body: string;
 }
 
+export interface ReportHistoryEntry {
+  seq: number;
+  kind: string;
+  actorName: string;
+  createdAt: Date;
+  details: string[];
+}
+
 export interface ReportDocument {
   generatedAt: Date;
   job: ReportJob;
   contractor: ReportParty;
   homeowners: ReportParty[];
+  history: AsyncIterable<ReportHistoryEntry>;
   messages: AsyncIterable<ReportMessage>;
 }
 
@@ -91,6 +100,24 @@ export class PdfKitReportWriter implements ReportWriter {
       this.keyValue(doc, 'Homeowner', `${homeowner.name} <${homeowner.email}>`);
     }
 
+    this.section(doc, 'History');
+    let entries = 0;
+    for await (const entry of report.history) {
+      entries += 1;
+      doc
+        .fontSize(9)
+        .fillColor(MUTED)
+        .text(`#${entry.seq}  ${entry.createdAt.toISOString()}  ${entry.actorName}`);
+      doc.fontSize(10).fillColor(INK).text(entry.kind, { indent: 12 });
+      for (const detail of entry.details) {
+        doc.fontSize(9).fillColor(INK).text(detail, { indent: 24 });
+      }
+      doc.moveDown(0.4);
+    }
+    if (entries === 0) {
+      doc.fontSize(10).fillColor(INK).text('No history recorded.');
+    }
+
     this.section(doc, 'Messages');
     let count = 0;
     for await (const message of report.messages) {
@@ -126,7 +153,7 @@ export class PdfKitReportWriter implements ReportWriter {
   }
 }
 
-function formatAddress(address: ReportAddress): string {
+export function formatAddress(address: ReportAddress): string {
   return [
     address.addressLine1,
     address.addressLine2,

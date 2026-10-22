@@ -2,18 +2,13 @@ import { Readable } from 'node:stream';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { PdfKitReportWriter, type ReportWriter } from '../../infra/pdf/report-pdf.js';
-import { InMemoryQueue } from '../../infra/queue/in-memory-queue.js';
-import { InMemoryStorage } from '../../infra/storage/in-memory-storage.js';
+import { type ReportWriter } from '../../infra/pdf/report-pdf.js';
+import { type InMemoryQueue } from '../../infra/queue/in-memory-queue.js';
+import { type InMemoryStorage } from '../../infra/storage/in-memory-storage.js';
 import { type Actor } from '../../shared/actor.js';
 import { NotFoundError, ValidationError } from '../../shared/errors.js';
-import { fakeDb, FakeJobsRepository } from '../jobs/jobs.repository.fake.js';
-import { JobsService } from '../jobs/jobs.service.js';
-import { FakeMessagesRepository } from '../messages/messages.repository.fake.js';
-import { MessagesService } from '../messages/messages.service.js';
-import { FakeUsersRepository, userRow } from '../users/users.repository.fake.js';
-import { UsersService } from '../users/users.service.js';
-import { FakeReportsRepository } from './reports.repository.fake.js';
+import { createFakeServices } from '../services.fake.js';
+import { userRow } from '../users/users.repository.fake.js';
 import { ReportsService, type ReportsServiceDeps } from './reports.service.js';
 import { REPORT_MESSAGE_BATCH_SIZE } from './reports.types.js';
 
@@ -38,45 +33,32 @@ describe('ReportsService', () => {
   let jobId: string;
 
   beforeEach(async () => {
-    const usersRepository = new FakeUsersRepository([
-      userRow({ id: alice.id, email: 'alice@contractor.test', name: 'Alice Contractor' }),
-      userRow({ id: dave.id, email: 'dave@contractor.test', name: 'Dave Contractor' }),
-      userRow({
-        id: bob.id,
-        email: 'bob@homeowner.test',
-        name: 'Bob Homeowner',
-        role: 'HOMEOWNER',
-      }),
-    ]);
-    const jobsService = new JobsService(fakeDb(), new FakeJobsRepository(), usersRepository);
-    const messagesService = new MessagesService(
-      fakeDb(),
-      new FakeMessagesRepository(),
-      jobsService,
-    );
-    queue = new InMemoryQueue();
-    storage = new InMemoryStorage();
-    deps = {
-      db: fakeDb(),
-      reportsRepository: new FakeReportsRepository(),
-      jobsService,
-      usersService: new UsersService(fakeDb(), usersRepository),
-      messagesService,
-      queue,
-      storage,
-      writer: new PdfKitReportWriter(),
-    };
-    service = new ReportsService(deps);
+    const fake = createFakeServices({
+      users: [
+        userRow({ id: alice.id, email: 'alice@contractor.test', name: 'Alice Contractor' }),
+        userRow({ id: dave.id, email: 'dave@contractor.test', name: 'Dave Contractor' }),
+        userRow({
+          id: bob.id,
+          email: 'bob@homeowner.test',
+          name: 'Bob Homeowner',
+          role: 'HOMEOWNER',
+        }),
+      ],
+    });
+    deps = fake.reportsDeps;
+    queue = fake.queue;
+    storage = fake.storage;
+    service = fake.services.reports;
 
-    const job = await jobsService.createJob(alice, {
+    const job = await fake.services.jobs.createJob(alice, {
       description: 'Kitchen remodel',
       location: { addressLine1: '1 Main St', city: 'Austin', state: 'TX', postalCode: '78701' },
       costCents: 2_500_000,
     });
     jobId = job.id;
-    await jobsService.addHomeowner(alice, jobId, 'bob@homeowner.test');
-    await messagesService.sendMessage(alice, { jobId, body: 'Demolition starts Monday.' });
-    await messagesService.sendMessage(bob, { jobId, body: 'Great, thanks!' });
+    await fake.services.jobs.addHomeowner(alice, jobId, 'bob@homeowner.test');
+    await fake.services.messages.sendMessage(alice, { jobId, body: 'Demolition starts Monday.' });
+    await fake.services.messages.sendMessage(bob, { jobId, body: 'Great, thanks!' });
   });
 
   describe('requestReport', () => {

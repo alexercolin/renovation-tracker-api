@@ -29,3 +29,18 @@ export function encodeCursor(id: string): string {
 export function decodeCursor(cursor: string): string {
   return parseId(Buffer.from(cursor, 'base64url').toString('utf8'), 'cursor');
 }
+
+export function encodeSeqCursor(seq: number): string {
+  return Buffer.from(String(seq), 'utf8').toString('base64url');
+}
+
+export function decodeSeqCursor(cursor: string): number {
+  const decoded = Buffer.from(cursor, 'base64url').toString('utf8');
+  const seq = Number(decoded);
+  if (!Number.isInteger(seq) || seq < 1 || String(seq) !== decoded) {
+    throw new ValidationError('Invalid cursor', [
+      { path: 'cursor', message: 'Cursor is not recognised' },
+    ]);
+  }
+  return seq;
+}

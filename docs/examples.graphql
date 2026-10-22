@@ -187,3 +187,81 @@ query Report($id: ID!) {
     }
   }
 }
+
+query JobHistory($jobId: ID!, $after: String) {
+  job(id: $jobId) {
+    version
+    canUndo
+    canRedo
+    history(first: 20, after: $after) {
+      edges {
+        cursor
+        node {
+          seq
+          kind
+          targetSeq
+          supersededAt
+          createdAt
+          actor {
+            name
+            role
+          }
+          changes {
+            field
+            before
+            after
+          }
+        }
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+}
+
+mutation UndoJobChange($jobId: ID!) {
+  undoJobChange(jobId: $jobId, expectedVersion: 3) {
+    id
+    status
+    costCents
+    deletedAt
+    version
+    canUndo
+    canRedo
+  }
+}
+
+mutation RedoJobChange($jobId: ID!) {
+  redoJobChange(jobId: $jobId) {
+    id
+    status
+    costCents
+    version
+    canUndo
+    canRedo
+  }
+}
+
+subscription MessageAdded($jobId: ID!) {
+  messageAdded(jobId: $jobId) {
+    id
+    body
+    createdAt
+    sender {
+      name
+      role
+    }
+  }
+}
+
+subscription ReportUpdated($reportId: ID!) {
+  reportUpdated(reportId: $reportId) {
+    id
+    status
+    attempts
+    error
+    downloadUrl
+  }
+}

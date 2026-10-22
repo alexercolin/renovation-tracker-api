@@ -77,3 +77,19 @@ builder.mutationField('sendMessage', (t) =>
     resolve: (_root, args, ctx) => ctx.services.messages.sendMessage(requireCurrentUser(ctx), args),
   }),
 );
+
+builder.subscriptionField('messageAdded', (t) =>
+  t.field({
+    type: MessageRef,
+    description: 'Fires for every new message on a job the caller belongs to.',
+    authScopes: { authenticated: true },
+    args: { jobId: t.arg.id() },
+    subscribe: (_root, args, ctx) =>
+      ctx.services.messages.subscribeToJob(requireCurrentUser(ctx), args.jobId),
+    resolve: async (event, _args, ctx) => {
+      const message = await ctx.services.messages.getMessageById(event.messageId);
+      ctx.loaders.jobById.clear(message.jobId);
+      return message;
+    },
+  }),
+);

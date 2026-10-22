@@ -18,6 +18,11 @@ export class MessagesRepository {
     return row;
   }
 
+  async findById(db: DbExecutor, id: string): Promise<MessageRow | undefined> {
+    const [row] = await db.select().from(messages).where(eq(messages.id, id)).limit(1);
+    return row;
+  }
+
   async findByClientMessageId(
     db: DbExecutor,
     senderId: string,

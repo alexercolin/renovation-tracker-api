@@ -24,6 +24,7 @@ export interface TestApp {
   ): Promise<GraphQLResponse<TData>>;
   loginAs(email: string): Promise<string>;
   resetDatabase(): Promise<void>;
+  listen(): Promise<string>;
   close(): Promise<void>;
 }
 
@@ -63,9 +64,15 @@ export async function createTestApp(): Promise<TestApp> {
     },
     async resetDatabase() {
       await container.db.execute(
-        sql`truncate table reports, messages, job_homeowners, jobs, users restart identity cascade`,
+        sql`truncate table job_history, reports, messages, job_homeowners, jobs, users restart identity cascade`,
       );
       await seedDatabase(container.db);
+    },
+    async listen() {
+      await app.listen({ port: 0, host: '127.0.0.1' });
+      const address = app.server.address();
+      if (!address || typeof address === 'string') throw new Error('server has no TCP address');
+      return `http://127.0.0.1:${address.port}`;
     },
     async close() {
       await app.close();

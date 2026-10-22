@@ -4,11 +4,15 @@ import { type Env } from './config/env.js';
 import { createDb, type Db } from './db/client.js';
 import { type AwsClients, createAwsClients } from './infra/aws.js';
 import { PdfKitReportWriter } from './infra/pdf/report-pdf.js';
+import { type RealtimePubSub } from './infra/pubsub/pubsub.js';
+import { createRedisPubSub } from './infra/pubsub/redis-pubsub.js';
 import { type MessageQueue } from './infra/queue/queue.js';
 import { SqsQueue } from './infra/queue/sqs-queue.js';
 import { S3Storage } from './infra/storage/s3-storage.js';
 import { type ObjectStorage } from './infra/storage/storage.js';
 import { AuthService } from './modules/auth/auth.service.js';
+import { HistoryRepository } from './modules/history/history.repository.js';
+import { HistoryService } from './modules/history/history.service.js';
 import { JobsRepository } from './modules/jobs/jobs.repository.js';
 import { JobsService } from './modules/jobs/jobs.service.js';
 import { MessagesRepository } from './modules/messages/messages.repository.js';
@@ -24,11 +28,13 @@ export interface Container {
   db: Db;
   queue: MessageQueue;
   storage: ObjectStorage;
+  pubsub: RealtimePubSub;
   repositories: {
     users: UsersRepository;
     jobs: JobsRepository;
     messages: MessagesRepository;
     reports: ReportsRepository;
+    history: HistoryRepository;
   };
   services: {
     users: UsersService;
@@ -36,6 +42,7 @@ export interface Container {
     jobs: JobsService;
     messages: MessagesService;
     reports: ReportsService;
+    history: HistoryService;
   };
   close(): Promise<void>;
 }
@@ -49,17 +56,20 @@ export function createContainer(env: Env): Container {
   const aws: AwsClients = createAwsClients(env);
   const queue = new SqsQueue(aws.sqs, env.SQS_REPORTS_QUEUE_URL);
   const storage = new S3Storage(aws.s3, env.S3_REPORTS_BUCKET);
+  const realtime = createRedisPubSub(env.REDIS_URL);
 
   const repositories = {
     users: new UsersRepository(),
     jobs: new JobsRepository(),
     messages: new MessagesRepository(),
     reports: new ReportsRepository(),
+    history: new HistoryRepository(),
   };
 
   const users = new UsersService(db, repositories.users);
-  const jobs = new JobsService(db, repositories.jobs, repositories.users);
-  const messages = new MessagesService(db, repositories.messages, jobs);
+  const history = new HistoryService(db, repositories.history, repositories.jobs);
+  const jobs = new JobsService(db, repositories.jobs, repositories.users, history);
+  const messages = new MessagesService(db, repositories.messages, jobs, realtime.pubsub);
   const services = {
     users,
     auth: new AuthService(db, repositories.users, {
@@ -74,10 +84,13 @@ export function createContainer(env: Env): Container {
       jobsService: jobs,
       usersService: users,
       messagesService: messages,
+      historyService: history,
       queue,
       storage,
       writer: new PdfKitReportWriter(),
+      pubsub: realtime.pubsub,
     }),
+    history,
   };
 
   return {
@@ -86,10 +99,12 @@ export function createContainer(env: Env): Container {
     db,
     queue,
     storage,
+    pubsub: realtime.pubsub,
     repositories,
     services,
     async close() {
       aws.destroy();
+      await realtime.close();
       await pool.end();
     },
   };

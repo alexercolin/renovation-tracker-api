@@ -1,4 +1,4 @@
-import { type FastifyBaseLogger, type FastifyRequest } from 'fastify';
+import { type FastifyBaseLogger } from 'fastify';
 
 import { type Container } from '../container.js';
 import { type AuthService, type CurrentUser } from '../modules/auth/auth.service.js';
@@ -13,14 +13,20 @@ export interface GraphQLContext {
   loaders: Loaders;
 }
 
+export interface ContextSource {
+  requestId: string;
+  log: FastifyBaseLogger;
+  authorization: unknown;
+}
+
 export async function buildContext(
   container: Container,
-  req: FastifyRequest,
+  source: ContextSource,
 ): Promise<GraphQLContext> {
-  const currentUser = await authenticate(container.services.auth, req.headers.authorization);
+  const currentUser = await authenticate(container.services.auth, source.authorization);
   return {
-    requestId: req.id,
-    log: req.log,
+    requestId: source.requestId,
+    log: source.log,
     currentUser,
     services: container.services,
     loaders: createLoaders(container.services),
@@ -32,11 +38,11 @@ export function requireCurrentUser(ctx: GraphQLContext): CurrentUser {
   return ctx.currentUser;
 }
 
-async function authenticate(
-  auth: AuthService,
-  header: string | undefined,
-): Promise<CurrentUser | null> {
-  if (!header) return null;
+async function authenticate(auth: AuthService, header: unknown): Promise<CurrentUser | null> {
+  if (header === undefined || header === null || header === '') return null;
+  if (typeof header !== 'string') {
+    throw new UnauthenticatedError('Malformed Authorization header');
+  }
   const [scheme, token, ...rest] = header.split(' ');
   if (scheme?.toLowerCase() !== 'bearer' || !token || rest.length > 0) {
     throw new UnauthenticatedError('Malformed Authorization header');

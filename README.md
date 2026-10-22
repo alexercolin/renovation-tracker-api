@@ -4,8 +4,8 @@ Backend for a tool where contractors and homeowners collaborate on renovation jo
 job CRUD with homeowners, a chat-like message log, asynchronous PDF report export,
 a full change history with undo/redo, and real-time messaging.
 
-Status: the core features are complete. Job history with undo/redo and real-time messaging
-arrive in the second pull request.
+Status: all features are complete, including job history with undo/redo and real-time
+messaging over GraphQL subscriptions.
 
 ## Stack
 
@@ -20,15 +20,15 @@ arrive in the second pull request.
 One package, two processes, one composition root.
 
 ```
-client ── HTTP ──▶ api: Fastify + GraphQL Yoga
-                     │  Pothos schema (modules/*/*.graphql.ts): arguments in, service call, result out
-                     ▼
-                   services: validation, business rules, transactions, ownership checks
-                     │
-                     ▼
-                   repositories: SQL through Drizzle ──▶ PostgreSQL
-                     │
-   requestReport ────┴──▶ SQS ──▶ worker (same container, same services) ──▶ PDF ──▶ S3
+client ── HTTP / WebSocket ──▶ api: Fastify + GraphQL Yoga (+ graphql-ws)
+                                 │  Pothos schema (modules/*/*.graphql.ts): arguments in, service call, result out
+                                 ▼
+                               services: validation, business rules, transactions, ownership checks
+                                 │                                  │
+                                 ▼                                  ▼
+                               repositories: Drizzle ──▶ PostgreSQL  Redis PubSub ──▶ subscriptions
+                                 │                                  ▲
+   requestReport ────────────────┴──▶ SQS ──▶ worker (same container) ──▶ PDF ──▶ S3
 ```
 
 - **Request path.** A GraphQL field never holds logic: it reads its arguments, calls a service and
@@ -45,9 +45,14 @@ client ── HTTP ──▶ api: Fastify + GraphQL Yoga
   tests. Modules never import the AWS SDK.
 - **Per-request DataLoaders** batch the lookups behind `Job.contractor`, `Job.homeowners`,
   `Message.sender` and `Message.job`, so a list of jobs costs a constant number of queries.
+- **Real time.** GraphQL subscriptions run over WebSocket with the graphql-ws protocol on the
+  same `/graphql` endpoint. Services publish thin events (`{ messageId }`, `{ reportId }`) to a
+  Redis-backed PubSub after writing to Postgres, so the worker can notify API subscribers and
+  several API instances share the same stream; resolvers load the fresh row on delivery.
 - **Modules.** `users` (identity), `auth` (login and JWT), `jobs` (CRUD, soft delete,
-  homeowners, optimistic locking), `messages` (chat log with keyset pagination), `reports`
-  (asynchronous PDF pipeline and the worker loop).
+  homeowners, optimistic locking), `messages` (chat log with keyset pagination and the
+  `messageAdded` subscription), `history` (append-only timeline, undo and redo), `reports`
+  (asynchronous PDF pipeline, the worker loop and the `reportUpdated` subscription).
 
 ## Quick start
 
@@ -174,6 +179,76 @@ catches up after a disconnect; `last`/`before` walks backward from the newest me
 50 messages by default and at most 100; asking for more is a `VALIDATION` error rather than a
 silent cut.
 
+### Real-time messaging
+
+Two subscriptions are available over WebSocket at `ws://localhost:4000/graphql` using the
+graphql-ws protocol, which is what Apollo Client, urql and Relay speak. Because browsers cannot
+set headers on a WebSocket, the token travels in the connection parameters:
+
+```json
+{ "authorization": "Bearer <token>" }
+```
+
+- `messageAdded(jobId)` fires for every new message on a job the caller belongs to. A homeowner
+  who is not a member, or anyone else, gets `NOT_FOUND` when subscribing.
+- `reportUpdated(reportId)` fires on every status change of a report the caller requested:
+  `PROCESSING`, then `COMPLETED` with a `downloadUrl`, or `PENDING` and `FAILED` on retries.
+
+GraphiQL at `http://localhost:4000/graphql` runs subscriptions too, so the quickest demo is to
+open two tabs, subscribe in one and post a message in the other. The same subscriptions also
+work over Server-Sent Events, which Yoga serves on the same endpoint, handy for curl:
+
+```bash
+curl -N http://localhost:4000/graphql \
+  -H 'accept: text/event-stream' \
+  -H "authorization: Bearer $TOKEN" \
+  -G --data-urlencode "query=subscription { messageAdded(jobId: \"$JOB_ID\") { body sender { name } } }"
+```
+
+A subscription is a notification, not a store. If a client disconnects, it reconnects and asks
+`job.messages(after: <last cursor>)` for whatever it missed; Postgres is the source of truth.
+
+### History, undo and redo
+
+Every change to a job is recorded in `job_history`, an append-only table enforced by a database
+trigger. Each entry holds the kind of change, who made it, when, and the fields it touched with
+their values before and after. Contractors and homeowners read the timeline through
+`job.history`, a Relay connection ordered by `seq`; only contractors can undo and redo.
+
+```bash
+curl -s http://localhost:4000/graphql \
+  -H 'content-type: application/json' \
+  -H "authorization: Bearer $TOKEN" \
+  -d "{ \"query\": \"{ job(id: \\\"$JOB_ID\\\") { version canUndo canRedo history(first: 20) { edges { node { seq kind targetSeq supersededAt actor { name } changes { field before after } } } } } }\" }"
+```
+
+```bash
+curl -s http://localhost:4000/graphql \
+  -H 'content-type: application/json' \
+  -H "authorization: Bearer $TOKEN" \
+  -d "{ \"query\": \"mutation { undoJobChange(jobId: \\\"$JOB_ID\\\") { costCents status deletedAt version canUndo canRedo } }\" }"
+```
+
+How it works:
+
+- `UPDATED` and `DELETED` entries are the undo stack. `jobs.history_cursor` points at the last
+  applied one; `CREATED`, `HOMEOWNER_ADDED` and `HOMEOWNER_REMOVED` are in the timeline but are
+  never undone.
+- **Undo** locks the job row, takes the entry at the cursor, checks that every field still holds
+  the recorded `after` value, writes the `before` values, moves the cursor to the previous
+  undoable entry and appends an `UNDONE` entry pointing at what it reverted. Undoing a `DELETED`
+  entry restores the job.
+- **Redo** does the mirror image with the first undoable entry above the cursor and appends
+  `REDONE`.
+- A new edit while redo is available marks the discarded entries with `supersededAt` instead of
+  deleting them, so the audit trail stays complete; `canRedo` turns false.
+- Undo and redo bump `version` like any other change and accept `expectedVersion`, so two
+  contractors cannot undo past each other without noticing. Nothing to undo or redo is a
+  `CONFLICT`.
+- The trigger rejects every `UPDATE` and `DELETE` on `job_history` except setting `supersededAt`
+  once. If an undo ever finds a value that does not match what was recorded, it aborts the
+  transaction instead of writing, which is the integrity guarantee the design rests on.
+
 ### Reports
 
 A contractor can export a full PDF report of a job. Reports can be large, so generation is
@@ -184,7 +259,8 @@ asynchronous:
    reason and returned as such, so the client can simply request again.
 2. The worker (`pnpm dev:worker`, or the `worker` Compose service) long-polls the queue. For each
    message it marks the report `PROCESSING`, streams the PDF straight into S3 with a multipart
-   upload while it reads messages from Postgres in batches of 500, then marks it `COMPLETED`.
+   upload while it reads the history and the messages from Postgres in batches of 500, then marks
+   it `COMPLETED`. The PDF covers the job, the people, the full timeline and the chat log.
 3. The client polls `report(id)`. Once `COMPLETED`, `downloadUrl` carries a presigned S3 URL valid
    for 15 minutes; it is generated on each read, never stored.
 
@@ -267,6 +343,8 @@ src/
     jobs/         Job CRUD, soft delete, homeowners, optimistic locking
     messages/     Chat log: sendMessage and the job.messages connection
     reports/      requestReport, report query, worker loop and PDF pipeline
+    history/      Append-only job timeline, undo and redo
+  infra/pubsub/   Redis-backed PubSub for subscriptions, with an in-memory twin
   shared/         Cross-cutting helpers (errors, ids)
 tests/            Integration tests against real Postgres and LocalStack
 docs/             GraphQL examples and design notes
@@ -292,13 +370,42 @@ docs/             GraphQL examples and design notes
 - `expectedVersion` is optional. Clients that send it get `CONFLICT` on lost updates; clients
   that omit it get last write wins. A no-op update and a homeowner change do not bump the version,
   because the version protects the job's own fields.
-- Deleting a job is a soft delete that freezes it: every mutation answers `CONFLICT`. Undo in
-  the next pull request is how a deleted job comes back.
+- Deleting a job is a soft delete that freezes it: every mutation answers `CONFLICT`. Undo is how
+  a deleted job comes back.
 - Errors are standard GraphQL errors with a stable `extensions.code`, rather than union result
   types per mutation. Examples stay short and every client understands them; the price is that
   error shapes are not part of the schema.
 - Relay connections are used only for lists that grow without bound (messages, and history
   later). A contractor's jobs and a job's homeowners are plain arrays.
+
+**History**
+
+- Undo is strictly linear, last applied change first. Reverting an arbitrary older entry is
+  deliberately unsupported: because undo always targets the top of the stack, the current state
+  is guaranteed to equal the recorded `after` value, which is what makes the integrity check
+  possible. Selective revert would need per-field conflict rules.
+- A new edit discards the redo stack, as editors do, by marking entries superseded; the
+  alternative of a branching history was rejected as hard to expose and explain.
+- Creation and homeowner membership are recorded but not undoable; a job cannot be un-created,
+  and membership is managed explicitly.
+- `before`/`after` values are stored as JSON, so dates travel as ISO strings and the location is
+  one composite value. Comparisons for the integrity check normalise both sides first.
+
+**Real time**
+
+- Delivery is at-most-once: an event published while a client is disconnected is not replayed.
+  The keyset cursor on `job.messages` exists precisely so a client can catch up after
+  reconnecting. Durable per-client delivery would need an inbox table and offsets, which is a
+  different product.
+- Events carry only an id. The resolver loads the row when it delivers, so clients never see a
+  payload that is stale or shaped differently after a Redis round trip, at the cost of one query
+  per event per subscriber.
+- Redis is required at boot for both processes. The in-memory PubSub used by the unit tests would
+  also work for a single API instance without a worker, but it would silently stop report events
+  from reaching the API, so it is not offered as a configuration.
+- The WebSocket handshake accepts the token in connection parameters; a bad token fails the
+  subscription with `UNAUTHENTICATED` rather than closing the socket, so one bad operation does
+  not tear down a connection that carries others.
 
 **Messages**
 
@@ -342,9 +449,9 @@ call; `docs/decisions.md` records the outcomes. Implementation then went module 
 assistant wrote code and tests, I reviewed each module before it was committed, and every module
 had to pass lint, typecheck and both test suites locally before the next one started.
 
-## Next pull request
+## With more time
 
-- Job history: an append-only change log with before/after values per field, and linear
-  undo/redo for contractors with a cursor on the job row.
-- Real-time messaging: GraphQL subscriptions over WebSocket with Redis as the PubSub between
-  the API and the worker.
+- A transactional outbox so the report row and its queue message cannot drift apart.
+- Extending the SQS visibility timeout while a long report is generating.
+- Sub-tasks and sub-contractors as further modules on the same pattern.
+- Durable, per-client event delivery for clients that cannot afford to miss a message.

@@ -20,6 +20,7 @@ export type JobPatch = Partial<
     | 'status'
     | 'costCents'
     | 'deletedAt'
+    | 'historyCursor'
   >
 >;
 

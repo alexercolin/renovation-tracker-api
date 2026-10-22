@@ -1,0 +1,99 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: renovation
+    ports:
+      - '5432:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./scripts/postgres-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U app -d renovation']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - '6379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  localstack:
+    image: localstack/localstack:4.14
+    environment:
+      SERVICES: sqs,s3
+      DEBUG: 0
+    ports:
+      - '4566:4566'
+    volumes:
+      - ./scripts/localstack-init.sh:/etc/localstack/init/ready.d/init.sh:ro
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'curl -sf localhost:4566/_localstack/init/ready | grep -q ''"completed": true''',
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    profiles: [app]
+    build: .
+    command: ['node', 'dist/db/migrate.js']
+    environment: &app-env
+      NODE_ENV: production
+      LOG_LEVEL: info
+      DATABASE_URL: postgres://app:app@postgres:5432/renovation
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: docker-compose-secret-change-me
+      AWS_REGION: us-east-1
+      AWS_ENDPOINT_URL: http://localstack:4566
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      SQS_REPORTS_QUEUE_URL: http://localstack:4566/000000000000/reports
+      S3_REPORTS_BUCKET: reports
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    profiles: [app]
+    build: .
+    command: ['node', 'dist/api.js']
+    environment:
+      <<: *app-env
+      PORT: 4000
+    ports:
+      - '4000:4000'
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+
+  worker:
+    profiles: [app]
+    build: .
+    command: ['node', 'dist/worker.js']
+    environment: *app-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+
+volumes:
+  pgdata:

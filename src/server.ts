@@ -3,7 +3,8 @@ import { createYoga, type YogaLogger } from 'graphql-yoga';
 import { type Logger } from 'pino';
 
 import { type Container } from './container.js';
-import { type GraphQLContext } from './graphql/context.js';
+import { buildContext, type GraphQLContext } from './graphql/context.js';
+import { maskError } from './graphql/errors.js';
 import { schema } from './graphql/schema.js';
 
 interface ServerContext {
@@ -32,8 +33,8 @@ export async function buildServer(container: Container) {
     schema,
     graphqlEndpoint: '/graphql',
     logging: toYogaLogger(container.logger),
-    maskedErrors: container.env.NODE_ENV === 'production',
-    context: ({ req }) => ({ requestId: req.id, log: req.log }),
+    maskedErrors: { maskError, isDev: container.env.NODE_ENV !== 'production' },
+    context: ({ req }) => buildContext(container, req),
   });
 
   app.addContentTypeParser('multipart/form-data', {}, (_req, _payload, done) => done(null));

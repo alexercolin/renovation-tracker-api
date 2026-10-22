@@ -1,3 +1,6 @@
+import '../modules/users/users.graphql.js';
+import '../modules/auth/auth.graphql.js';
+
 import { builder } from './builder.js';
 
 builder.queryField('health', (t) =>

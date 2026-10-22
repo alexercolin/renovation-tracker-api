@@ -9,29 +9,37 @@
     "node": ">=22.9"
   },
   "scripts": {
-    "dev": "node --env-file-if-missing=.env --import tsx --watch src/api.ts",
-    "dev:worker": "node --env-file-if-missing=.env --import tsx --watch src/worker.ts",
+    "dev": "node --env-file=.env --import tsx --watch src/api.ts",
+    "dev:worker": "node --env-file=.env --import tsx --watch src/worker.ts",
     "build": "tsc -p tsconfig.build.json",
-    "start": "node --env-file-if-missing=.env dist/api.js",
-    "start:worker": "node --env-file-if-missing=.env dist/worker.js",
+    "start": "node --env-file=.env dist/api.js",
+    "start:worker": "node --env-file=.env dist/worker.js",
     "typecheck": "tsc -p tsconfig.json",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
+    "test:unit": "vitest run --project unit",
+    "test:integration": "vitest run --project integration",
     "test:watch": "vitest",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "node --env-file-if-missing=.env --import tsx src/db/migrate.ts"
+    "db:migrate": "node --env-file=.env --import tsx src/db/migrate.ts",
+    "db:seed": "node --env-file=.env --import tsx src/db/seed.ts"
   },
   "dependencies": {
     "@pothos/core": "^4.15.1",
+    "@pothos/plugin-scope-auth": "^4.2.1",
+    "bcryptjs": "^3.0.3",
+    "dataloader": "^2.2.3",
     "drizzle-orm": "^0.45.4",
     "fastify": "^5.12.7",
     "graphql": "^16.14.2",
     "graphql-yoga": "^5.24.6",
+    "jose": "^6.2.13",
     "pg": "^8.23.1",
     "pino": "^10.4.0",
+    "uuid": "^14.0.3",
     "zod": "^4.6.7"
   },
   "devDependencies": {

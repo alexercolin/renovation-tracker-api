@@ -21,9 +21,21 @@ cp .env.example .env
 docker compose up -d          # postgres, redis, localstack
 pnpm install
 pnpm db:migrate
+pnpm db:seed
 pnpm dev                      # GraphQL API on http://localhost:4000/graphql (GraphiQL included)
 pnpm dev:worker               # report worker, in another terminal
 ```
+
+### Seeded accounts
+
+| Email                   | Password        | Role       |
+| ----------------------- | --------------- | ---------- |
+| `alice@contractor.test` | `contractor123` | Contractor |
+| `bob@homeowner.test`    | `homeowner123`  | Homeowner  |
+| `carol@homeowner.test`  | `homeowner123`  | Homeowner  |
+
+The seed is idempotent: running it again resets these three accounts and leaves everything else
+untouched.
 
 `docker compose up -d` starts only the infrastructure; the API and the worker run on the host
 with reload. To run everything in containers, migrations included:
@@ -57,6 +69,36 @@ which would force anyone running the project to create a LocalStack account. Its
 creates the `reports` queue with a dead letter queue (`reports-dlq`, three attempts) and the
 `reports` bucket; the Compose healthcheck only passes once that script has finished.
 
+## API usage
+
+Every request goes to `POST /graphql`. Authenticated calls send the JWT returned by `login` as
+`Authorization: Bearer <token>`. `docs/examples.graphql` collects every query and mutation
+ready to paste into GraphiQL.
+
+```bash
+curl -s http://localhost:4000/graphql -H 'content-type: application/json' -d '{
+  "query": "mutation { login(email: \"alice@contractor.test\", password: \"contractor123\") { token user { name role } } }"
+}'
+```
+
+```bash
+TOKEN=...   # from the login response
+curl -s http://localhost:4000/graphql \
+  -H 'content-type: application/json' \
+  -H "authorization: Bearer $TOKEN" \
+  -d '{ "query": "{ me { id email role } }" }'
+```
+
+Errors come back in the standard GraphQL `errors` array with a stable `extensions.code`:
+
+| Code              | Meaning                                                                             |
+| ----------------- | ----------------------------------------------------------------------------------- |
+| `UNAUTHENTICATED` | Missing, malformed or expired token, or wrong credentials                           |
+| `FORBIDDEN`       | Authenticated, but the role or ownership does not allow the operation               |
+| `NOT_FOUND`       | The entity does not exist or is not visible to the caller                           |
+| `CONFLICT`        | The operation clashes with the current state, for example a stale `expectedVersion` |
+| `VALIDATION`      | Invalid input; `extensions.issues` lists each field and message                     |
+
 ## Scripts
 
 | Script                                               | What it does                                     |
@@ -85,6 +127,9 @@ src/
   graphql/        Pothos builder, context and schema assembly
   infra/          Queue, storage and pubsub adapters behind interfaces
   modules/        Feature modules: graphql + service + repository each
+    users/        User type, me query
+    auth/         Login mutation, JWT issue and verification
   shared/         Cross-cutting helpers (errors, ids)
 tests/            Integration tests against real Postgres and LocalStack
+docs/             GraphQL examples and design notes
 ```

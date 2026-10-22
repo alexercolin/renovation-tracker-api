@@ -1,0 +1,19 @@
+mutation Login {
+  login(email: "alice@contractor.test", password: "contractor123") {
+    token
+    user {
+      id
+      name
+      role
+    }
+  }
+}
+
+query Me {
+  me {
+    id
+    email
+    name
+    role
+  }
+}

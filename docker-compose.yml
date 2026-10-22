@@ -48,7 +48,7 @@ services:
   migrate:
     profiles: [app]
     build: .
-    command: ['node', 'dist/db/migrate.js']
+    command: ['sh', '-c', 'node dist/db/migrate.js && node dist/db/seed.js']
     environment: &app-env
       NODE_ENV: production
       LOG_LEVEL: info

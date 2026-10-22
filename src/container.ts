@@ -2,11 +2,21 @@ import pino, { type Logger } from 'pino';
 
 import { type Env } from './config/env.js';
 import { createDb, type Db } from './db/client.js';
+import { AuthService } from './modules/auth/auth.service.js';
+import { UsersRepository } from './modules/users/users.repository.js';
+import { UsersService } from './modules/users/users.service.js';
 
 export interface Container {
   env: Env;
   logger: Logger;
   db: Db;
+  repositories: {
+    users: UsersRepository;
+  };
+  services: {
+    users: UsersService;
+    auth: AuthService;
+  };
   close(): Promise<void>;
 }
 
@@ -17,10 +27,24 @@ export function createContainer(env: Env): Container {
   });
   const { db, pool } = createDb(env.DATABASE_URL);
 
+  const repositories = {
+    users: new UsersRepository(),
+  };
+
+  const services = {
+    users: new UsersService(db, repositories.users),
+    auth: new AuthService(db, repositories.users, {
+      jwtSecret: env.JWT_SECRET,
+      jwtExpiresIn: env.JWT_EXPIRES_IN,
+    }),
+  };
+
   return {
     env,
     logger,
     db,
+    repositories,
+    services,
     async close() {
       await pool.end();
     },

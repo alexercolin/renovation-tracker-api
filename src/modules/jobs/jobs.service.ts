@@ -122,6 +122,11 @@ export class JobsService {
     });
   }
 
+  async findManyByIds(ids: readonly string[]): Promise<Map<string, Job>> {
+    const rows = await this.jobsRepository.findManyByIds(this.db, ids);
+    return new Map(rows.map((row) => [row.id, toJob(row)]));
+  }
+
   async homeownersByJobIds(jobIds: readonly string[]): Promise<Map<string, User[]>> {
     const links = await this.jobsRepository.listHomeownerLinks(this.db, jobIds);
     const userIds = [...new Set(links.map((link) => link.homeownerId))];

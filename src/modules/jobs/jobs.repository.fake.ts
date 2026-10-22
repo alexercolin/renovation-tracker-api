@@ -49,6 +49,10 @@ export class FakeJobsRepository implements JobsRepository {
     return Promise.resolve(row && (includeDeleted || !row.deletedAt) ? row : undefined);
   }
 
+  findManyByIds(_db: DbExecutor, ids: readonly string[]): Promise<JobRow[]> {
+    return Promise.resolve(ids.flatMap((id) => this.rows.get(id) ?? []));
+  }
+
   findByIdForUpdate(_tx: Tx, id: string): Promise<JobRow | undefined> {
     return Promise.resolve(this.rows.get(id));
   }

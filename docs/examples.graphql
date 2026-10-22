@@ -108,3 +108,58 @@ mutation DeleteJob($id: ID!) {
     version
   }
 }
+
+mutation SendMessage($jobId: ID!) {
+  sendMessage(
+    jobId: $jobId
+    body: "Demolition starts Monday."
+    clientMessageId: "019a0000-0000-7000-8000-0000000000ff"
+  ) {
+    id
+    body
+    createdAt
+    sender {
+      name
+      role
+    }
+  }
+}
+
+query Messages($jobId: ID!, $after: String) {
+  job(id: $jobId) {
+    messages(first: 20, after: $after) {
+      edges {
+        cursor
+        node {
+          id
+          body
+          createdAt
+          sender {
+            name
+          }
+        }
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+}
+
+query LatestMessages($jobId: ID!) {
+  job(id: $jobId) {
+    messages(last: 20) {
+      edges {
+        node {
+          body
+          createdAt
+        }
+      }
+      pageInfo {
+        hasPreviousPage
+        startCursor
+      }
+    }
+  }
+}

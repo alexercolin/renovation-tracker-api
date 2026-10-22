@@ -21,5 +21,13 @@ export function maskError(error: unknown, message: string, isDev?: boolean): Err
     });
   }
 
+  if (original instanceof Error && original.name === 'PothosValidationError') {
+    return createGraphQLError(original.message, {
+      nodes: graphqlError?.nodes,
+      path: graphqlError?.path,
+      extensions: { code: 'VALIDATION' },
+    });
+  }
+
   return defaultMaskError(error, message, isDev);
 }

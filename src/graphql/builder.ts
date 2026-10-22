@@ -1,4 +1,5 @@
 import SchemaBuilder from '@pothos/core';
+import RelayPlugin from '@pothos/plugin-relay';
 import ScopeAuthPlugin from '@pothos/plugin-scope-auth';
 import { DateTimeResolver } from 'graphql-scalars';
 
@@ -19,7 +20,11 @@ export const builder = new SchemaBuilder<{
     homeowner: boolean;
   };
 }>({
-  plugins: [ScopeAuthPlugin],
+  plugins: [ScopeAuthPlugin, RelayPlugin],
+  relay: {
+    clientMutationId: 'omit',
+    cursorType: 'String',
+  },
   defaultFieldNullability: false,
   defaultInputFieldRequiredness: true,
   scopeAuth: {

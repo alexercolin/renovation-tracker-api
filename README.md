@@ -117,6 +117,28 @@ Every job carries a `version` that increments on each change. Sending it back as
 reports both the expected and the current version. Omitting it means last write wins.
 Money is always integer cents in USD.
 
+### Messages
+
+The contractor and the homeowners of a job share a chat log. Anyone who can see the job can read
+it and post to it; a deleted job keeps its log readable but refuses new messages.
+
+```bash
+curl -s http://localhost:4000/graphql \
+  -H 'content-type: application/json' \
+  -H "authorization: Bearer $TOKEN" \
+  -d "{ \"query\": \"mutation { sendMessage(jobId: \\\"$JOB_ID\\\", body: \\\"Demolition starts Monday.\\\") { id createdAt sender { name } } }\" }"
+```
+
+`sendMessage` accepts an optional `clientMessageId` (a UUID the client generates). Resending the
+same id after a timeout returns the original message instead of creating a duplicate, so retries
+are safe.
+
+`job.messages` is a Relay connection ordered oldest first. Cursors are keyset-based, so a page
+stays correct while new messages arrive. `first`/`after` walks forward, which is also how a client
+catches up after a disconnect; `last`/`before` walks backward from the newest message. Pages hold
+50 messages by default and at most 100; asking for more is a `VALIDATION` error rather than a
+silent cut.
+
 Errors come back in the standard GraphQL `errors` array with a stable `extensions.code`:
 
 | Code              | Meaning                                                                             |
@@ -158,6 +180,7 @@ src/
     users/        User type, me query
     auth/         Login mutation, JWT issue and verification
     jobs/         Job CRUD, soft delete, homeowners, optimistic locking
+    messages/     Chat log: sendMessage and the job.messages connection
   shared/         Cross-cutting helpers (errors, ids)
 tests/            Integration tests against real Postgres and LocalStack
 docs/             GraphQL examples and design notes

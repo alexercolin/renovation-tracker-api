@@ -47,6 +47,14 @@ export class JobsRepository {
     return row;
   }
 
+  async findManyByIds(db: DbExecutor, ids: readonly string[]): Promise<JobRow[]> {
+    if (ids.length === 0) return [];
+    return db
+      .select()
+      .from(jobs)
+      .where(inArray(jobs.id, [...ids]));
+  }
+
   async findByIdForUpdate(tx: Tx, id: string): Promise<JobRow | undefined> {
     const [row] = await tx.select().from(jobs).where(eq(jobs.id, id)).limit(1).for('update');
     return row;

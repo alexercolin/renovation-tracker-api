@@ -4,7 +4,8 @@ Backend for a tool where contractors and homeowners collaborate on renovation jo
 job CRUD with homeowners, a chat-like message log, asynchronous PDF report export,
 a full change history with undo/redo, and real-time messaging.
 
-> Work in progress. This README grows with each feature pull request.
+Status: the core features are complete. Job history with undo/redo and real-time messaging
+arrive in the second pull request.
 
 ## Stack
 
@@ -13,6 +14,40 @@ a full change history with undo/redo, and real-time messaging.
 - PostgreSQL 17 with Drizzle ORM
 - Redis (PubSub for GraphQL subscriptions across processes)
 - AWS SQS and S3 (LocalStack locally; same SDK code against real AWS)
+
+## Architecture
+
+One package, two processes, one composition root.
+
+```
+client ── HTTP ──▶ api: Fastify + GraphQL Yoga
+                     │  Pothos schema (modules/*/*.graphql.ts): arguments in, service call, result out
+                     ▼
+                   services: validation, business rules, transactions, ownership checks
+                     │
+                     ▼
+                   repositories: SQL through Drizzle ──▶ PostgreSQL
+                     │
+   requestReport ────┴──▶ SQS ──▶ worker (same container, same services) ──▶ PDF ──▶ S3
+```
+
+- **Request path.** A GraphQL field never holds logic: it reads its arguments, calls a service and
+  returns the result. Services validate input with zod, open transactions, lock rows and check
+  ownership. Repositories only run SQL and receive the executor (`Db` or `Tx`) as a parameter,
+  so a service composes several repositories inside one transaction.
+- **Authorization in two layers.** The Pothos scope-auth plugin enforces the role per field
+  (`authenticated`, `contractor`, `homeowner`). Services enforce ownership and membership, which
+  needs data, and they do it for every entry point, including the worker.
+- **Composition root.** `src/container.ts` is the only place that instantiates infrastructure,
+  repositories and services. The API and the worker both build it, so there is exactly one wiring.
+- **Infrastructure behind interfaces.** `src/infra/` defines `MessageQueue`, `ObjectStorage` and
+  `ReportWriter`, each with a real implementation (SQS, S3, pdfkit) and an in-memory one for
+  tests. Modules never import the AWS SDK.
+- **Per-request DataLoaders** batch the lookups behind `Job.contractor`, `Job.homeowners`,
+  `Message.sender` and `Message.job`, so a list of jobs costs a constant number of queries.
+- **Modules.** `users` (identity), `auth` (login and JWT), `jobs` (CRUD, soft delete,
+  homeowners, optimistic locking), `messages` (chat log with keyset pagination), `reports`
+  (asynchronous PDF pipeline and the worker loop).
 
 ## Quick start
 
@@ -197,6 +232,19 @@ Errors come back in the standard GraphQL `errors` array with a stable `extension
 | `pnpm db:generate`                                   | Generate a SQL migration from the Drizzle schema |
 | `pnpm db:migrate`                                    | Apply pending migrations                         |
 
+## Testing
+
+| Suite                   | What it exercises                                                                                                                             | Needs                  |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- |
+| `pnpm test:unit`        | Services against in-memory repositories and infrastructure doubles; the field diff; pdfkit renders real PDFs into memory                      | nothing                |
+| `pnpm test:integration` | GraphQL operations through the Fastify app without opening a port, against the `renovation_test` database and the LocalStack queue and bucket | `docker compose up -d` |
+
+The integration harness migrates the test database once per run, truncates and reseeds it per
+test file, and logs in through the real `login` mutation. The report test requests a report over
+GraphQL, drains the real SQS queue with the worker's polling function, then downloads the PDF
+from the presigned S3 URL and checks its header. CI runs both suites; the integration job starts
+the Compose infrastructure on the runner.
+
 ## Conventions
 
 `AGENTS.md` holds the rules every contributor and AI coding agent follows here, including the
@@ -223,3 +271,80 @@ src/
 tests/            Integration tests against real Postgres and LocalStack
 docs/             GraphQL examples and design notes
 ```
+
+## Assumptions, risks and tradeoffs
+
+**Scope and identity**
+
+- Login is intentionally simple: seeded accounts, bcrypt-hashed passwords, stateless HS256 JWTs.
+  There is no refresh token and no revocation; a token stays valid until it expires, and a role
+  change needs a new login. Sessions in Redis would buy revocation at the cost of a round trip
+  per request, which the challenge does not ask for.
+- A user is either a contractor or a homeowner. A job has exactly one contractor and any number
+  of homeowners, added by email.
+- Money is integer cents in USD. GraphQL `Int` caps a job at about 21 million dollars; the way
+  out is `bigint` plus a `BigInt` scalar.
+
+**API semantics**
+
+- Anything the caller cannot see answers `NOT_FOUND`, never `FORBIDDEN`, so ids cannot be probed.
+  `FORBIDDEN` is reserved for the role check on the field itself.
+- `expectedVersion` is optional. Clients that send it get `CONFLICT` on lost updates; clients
+  that omit it get last write wins. A no-op update and a homeowner change do not bump the version,
+  because the version protects the job's own fields.
+- Deleting a job is a soft delete that freezes it: every mutation answers `CONFLICT`. Undo in
+  the next pull request is how a deleted job comes back.
+- Errors are standard GraphQL errors with a stable `extensions.code`, rather than union result
+  types per mutation. Examples stay short and every client understands them; the price is that
+  error shapes are not part of the schema.
+- Relay connections are used only for lists that grow without bound (messages, and history
+  later). A contractor's jobs and a job's homeowners are plain arrays.
+
+**Messages**
+
+- Cursors carry the message id, and the database resolves the position with a subselect over
+  `(created_at, id)`. Timestamps never travel in cursors, which avoids microsecond truncation.
+- `clientMessageId` makes retries safe through a partial unique index; it is optional, so a
+  client that does not send it can still create duplicates on retry.
+
+**Reports**
+
+- The commit of the `reports` row and the send to SQS are two writes. If the send fails, the row
+  is marked `FAILED` with the reason and returned, so nothing is silently stuck. The production
+  answer is a transactional outbox; it is out of scope here and the code is shaped to receive it.
+- The queue's visibility timeout is 120 seconds. A report that takes longer would be delivered
+  to a second worker while the first is still generating. Extending visibility during processing
+  is the next step if reports grow that large.
+- The report is generated in a stream: messages are read in batches of 500 and the PDF is
+  uploaded with a multipart upload as it is produced, so memory does not grow with the job.
+- Three failed attempts mark the report `FAILED` and the message lands in `reports-dlq`; the
+  worker's own counter and the queue's `maxReceiveCount` are both three on purpose.
+- Download links are presigned S3 URLs valid for 15 minutes, generated on every read and never
+  stored.
+
+**Infrastructure and tooling**
+
+- LocalStack is pinned to 4.14, the last release that starts without an auth token. Newer images
+  require a license token even on the free plan, which would force evaluators to sign up.
+- Drizzle stays on the stable 0.45 line without the Pothos Drizzle plugin, which requires a
+  release candidate. Relations are resolved with explicit DataLoaders instead.
+- Node 22, TypeScript 5.9, ESLint 9 and graphql 16 are pinned because the newer majors shipped
+  weeks ago and the ecosystem still declares support only for these.
+- Not covered on purpose: rate limiting, CORS hardening beyond Yoga's defaults, HTTPS
+  termination, and multi-region or multi-tenant concerns.
+
+## How AI was used
+
+This project was built with Claude Code working as a pair. The design came first, in rounds
+where the assistant laid out the options and tradeoffs for each decision (stack, folder
+structure, database schema, history strategy, asynchronous flows, API contract) and I made the
+call; `docs/decisions.md` records the outcomes. Implementation then went module by module: the
+assistant wrote code and tests, I reviewed each module before it was committed, and every module
+had to pass lint, typecheck and both test suites locally before the next one started.
+
+## Next pull request
+
+- Job history: an append-only change log with before/after values per field, and linear
+  undo/redo for contractors with a cursor on the job row.
+- Real-time messaging: GraphQL subscriptions over WebSocket with Redis as the PubSub between
+  the API and the worker.

@@ -1,0 +1,189 @@
+mutation Login {
+  login(email: "alice@contractor.test", password: "contractor123") {
+    token
+    user {
+      id
+      name
+      role
+    }
+  }
+}
+
+query Me {
+  me {
+    id
+    email
+    name
+    role
+  }
+}
+
+mutation CreateJob {
+  createJob(
+    input: {
+      description: "Kitchen remodel"
+      location: { addressLine1: "1 Main St", city: "Austin", state: "TX", postalCode: "78701" }
+      costCents: 2500000
+    }
+  ) {
+    id
+    status
+    costCents
+    version
+    location {
+      addressLine1
+      city
+      country
+    }
+  }
+}
+
+query Jobs {
+  jobs(includeDeleted: false) {
+    id
+    description
+    status
+    costCents
+    version
+    contractor {
+      name
+    }
+    homeowners {
+      email
+    }
+  }
+}
+
+query Job($id: ID!) {
+  job(id: $id) {
+    id
+    description
+    status
+    costCents
+    version
+    deletedAt
+    location {
+      addressLine1
+      addressLine2
+      city
+      state
+      postalCode
+      country
+    }
+  }
+}
+
+mutation UpdateJob($id: ID!) {
+  updateJob(id: $id, input: { status: IN_PROGRESS, costCents: 2750000, expectedVersion: 1 }) {
+    id
+    status
+    costCents
+    version
+  }
+}
+
+mutation AddHomeowner($jobId: ID!) {
+  addHomeowner(jobId: $jobId, email: "bob@homeowner.test") {
+    id
+    homeowners {
+      id
+      email
+    }
+  }
+}
+
+mutation RemoveHomeowner($jobId: ID!, $homeownerId: ID!) {
+  removeHomeowner(jobId: $jobId, homeownerId: $homeownerId) {
+    id
+    homeowners {
+      email
+    }
+  }
+}
+
+mutation DeleteJob($id: ID!) {
+  deleteJob(id: $id, expectedVersion: 2) {
+    id
+    deletedAt
+    version
+  }
+}
+
+mutation SendMessage($jobId: ID!) {
+  sendMessage(
+    jobId: $jobId
+    body: "Demolition starts Monday."
+    clientMessageId: "019a0000-0000-7000-8000-0000000000ff"
+  ) {
+    id
+    body
+    createdAt
+    sender {
+      name
+      role
+    }
+  }
+}
+
+query Messages($jobId: ID!, $after: String) {
+  job(id: $jobId) {
+    messages(first: 20, after: $after) {
+      edges {
+        cursor
+        node {
+          id
+          body
+          createdAt
+          sender {
+            name
+          }
+        }
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+}
+
+query LatestMessages($jobId: ID!) {
+  job(id: $jobId) {
+    messages(last: 20) {
+      edges {
+        node {
+          body
+          createdAt
+        }
+      }
+      pageInfo {
+        hasPreviousPage
+        startCursor
+      }
+    }
+  }
+}
+
+mutation RequestReport($jobId: ID!) {
+  requestReport(jobId: $jobId) {
+    id
+    status
+    createdAt
+  }
+}
+
+query Report($id: ID!) {
+  report(id: $id) {
+    id
+    status
+    attempts
+    error
+    downloadUrl
+    startedAt
+    completedAt
+    job {
+      id
+      description
+    }
+  }
+}

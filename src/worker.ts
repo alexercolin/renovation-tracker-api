@@ -1,22 +1,23 @@
 import { loadEnv } from './config/env.js';
 import { createContainer } from './container.js';
+import { runReportWorker } from './modules/reports/reports.worker.js';
 
 const env = loadEnv();
 const container = createContainer(env);
+const controller = new AbortController();
 
-container.logger.info('worker started; queue consumers are registered by feature modules');
-
-const keepAlive = setInterval(() => undefined, 60_000);
-
-let stopping = false;
-async function shutdown(signal: NodeJS.Signals) {
-  if (stopping) return;
-  stopping = true;
+function stop(signal: NodeJS.Signals): void {
+  if (controller.signal.aborted) return;
   container.logger.info({ signal }, 'worker shutting down');
-  clearInterval(keepAlive);
-  await container.close();
-  process.exit(0);
+  controller.abort();
 }
 
-process.on('SIGTERM', (signal) => void shutdown(signal));
-process.on('SIGINT', (signal) => void shutdown(signal));
+process.on('SIGTERM', stop);
+process.on('SIGINT', stop);
+
+await runReportWorker(
+  { queue: container.queue, reports: container.services.reports, logger: container.logger },
+  controller.signal,
+);
+await container.close();
+process.exit(0);

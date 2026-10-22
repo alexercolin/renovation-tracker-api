@@ -3,6 +3,8 @@ import pino, { type Logger } from 'pino';
 import { type Env } from './config/env.js';
 import { createDb, type Db } from './db/client.js';
 import { AuthService } from './modules/auth/auth.service.js';
+import { JobsRepository } from './modules/jobs/jobs.repository.js';
+import { JobsService } from './modules/jobs/jobs.service.js';
 import { UsersRepository } from './modules/users/users.repository.js';
 import { UsersService } from './modules/users/users.service.js';
 
@@ -12,10 +14,12 @@ export interface Container {
   db: Db;
   repositories: {
     users: UsersRepository;
+    jobs: JobsRepository;
   };
   services: {
     users: UsersService;
     auth: AuthService;
+    jobs: JobsService;
   };
   close(): Promise<void>;
 }
@@ -29,6 +33,7 @@ export function createContainer(env: Env): Container {
 
   const repositories = {
     users: new UsersRepository(),
+    jobs: new JobsRepository(),
   };
 
   const services = {
@@ -37,6 +42,7 @@ export function createContainer(env: Env): Container {
       jwtSecret: env.JWT_SECRET,
       jwtExpiresIn: env.JWT_EXPIRES_IN,
     }),
+    jobs: new JobsService(db, repositories.jobs, repositories.users),
   };
 
   return {

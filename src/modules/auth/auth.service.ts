@@ -3,7 +3,7 @@ import { jwtVerify, SignJWT } from 'jose';
 import { z } from 'zod';
 
 import { type Db } from '../../db/client.js';
-import { type UserRole } from '../../db/schema/index.js';
+import { type Actor } from '../../shared/actor.js';
 import { UnauthenticatedError, ValidationError } from '../../shared/errors.js';
 import { toUser, type User } from '../users/users.service.js';
 import { type UsersRepository } from '../users/users.repository.js';
@@ -13,10 +13,7 @@ export interface AuthConfig {
   jwtExpiresIn: string;
 }
 
-export interface CurrentUser {
-  id: string;
-  role: UserRole;
-}
+export type CurrentUser = Actor;
 
 export interface AuthPayload {
   token: string;

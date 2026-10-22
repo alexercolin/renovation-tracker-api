@@ -1,5 +1,6 @@
 import SchemaBuilder from '@pothos/core';
 import ScopeAuthPlugin from '@pothos/plugin-scope-auth';
+import { DateTimeResolver } from 'graphql-scalars';
 
 import { ForbiddenError, UnauthenticatedError } from '../shared/errors.js';
 import { type GraphQLContext } from './context.js';
@@ -8,6 +9,10 @@ export const builder = new SchemaBuilder<{
   Context: GraphQLContext;
   DefaultFieldNullability: false;
   DefaultInputFieldRequiredness: true;
+  Scalars: {
+    ID: { Input: string; Output: string };
+    DateTime: { Input: Date; Output: Date };
+  };
   AuthScopes: {
     authenticated: boolean;
     contractor: boolean;
@@ -28,5 +33,6 @@ export const builder = new SchemaBuilder<{
   },
 });
 
+builder.addScalarType('DateTime', DateTimeResolver);
 builder.queryType({});
 builder.mutationType({});

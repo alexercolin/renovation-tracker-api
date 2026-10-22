@@ -3,12 +3,14 @@ import { type FastifyBaseLogger, type FastifyRequest } from 'fastify';
 import { type Container } from '../container.js';
 import { type AuthService, type CurrentUser } from '../modules/auth/auth.service.js';
 import { UnauthenticatedError } from '../shared/errors.js';
+import { createLoaders, type Loaders } from './loaders.js';
 
 export interface GraphQLContext {
   requestId: string;
   log: FastifyBaseLogger;
   currentUser: CurrentUser | null;
   services: Container['services'];
+  loaders: Loaders;
 }
 
 export async function buildContext(
@@ -21,6 +23,7 @@ export async function buildContext(
     log: req.log,
     currentUser,
     services: container.services,
+    loaders: createLoaders(container.services),
   };
 }
 

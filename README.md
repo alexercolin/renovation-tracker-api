@@ -34,7 +34,7 @@ pnpm dev:worker               # report worker, in another terminal
 | `bob@homeowner.test`    | `homeowner123`  | Homeowner  |
 | `carol@homeowner.test`  | `homeowner123`  | Homeowner  |
 
-The seed is idempotent: running it again resets these three accounts and leaves everything else
+The seed is idempotent: running it again resets these accounts and leaves everything else
 untouched.
 
 `docker compose up -d` starts only the infrastructure; the API and the worker run on the host
@@ -89,6 +89,34 @@ curl -s http://localhost:4000/graphql \
   -d '{ "query": "{ me { id email role } }" }'
 ```
 
+### Jobs
+
+A contractor creates jobs and adds homeowners to them by email. A job is visible to its contractor
+and to its homeowners; anyone else gets `NOT_FOUND`, so job ids cannot be probed. Only the
+contractor mutates a job. Deleting is a soft delete: the job disappears from every list and
+refuses further changes, but the contractor can still read it with `job(id)` or
+`jobs(includeDeleted: true)`.
+
+```bash
+curl -s http://localhost:4000/graphql \
+  -H 'content-type: application/json' \
+  -H "authorization: Bearer $TOKEN" \
+  -d '{ "query": "mutation { createJob(input: { description: \"Kitchen remodel\", location: { addressLine1: \"1 Main St\", city: \"Austin\", state: \"TX\", postalCode: \"78701\" }, costCents: 2500000 }) { id version status } }" }'
+```
+
+```bash
+JOB_ID=...  # from the createJob response
+curl -s http://localhost:4000/graphql \
+  -H 'content-type: application/json' \
+  -H "authorization: Bearer $TOKEN" \
+  -d "{ \"query\": \"mutation { updateJob(id: \\\"$JOB_ID\\\", input: { status: IN_PROGRESS, expectedVersion: 1 }) { id status version } }\" }"
+```
+
+Every job carries a `version` that increments on each change. Sending it back as
+`expectedVersion` on `updateJob` or `deleteJob` turns a lost update into a `CONFLICT` error that
+reports both the expected and the current version. Omitting it means last write wins.
+Money is always integer cents in USD.
+
 Errors come back in the standard GraphQL `errors` array with a stable `extensions.code`:
 
 | Code              | Meaning                                                                             |
@@ -129,6 +157,7 @@ src/
   modules/        Feature modules: graphql + service + repository each
     users/        User type, me query
     auth/         Login mutation, JWT issue and verification
+    jobs/         Job CRUD, soft delete, homeowners, optimistic locking
   shared/         Cross-cutting helpers (errors, ids)
 tests/            Integration tests against real Postgres and LocalStack
 docs/             GraphQL examples and design notes

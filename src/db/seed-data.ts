@@ -18,6 +18,12 @@ export const seedUsers: readonly SeedUser[] = [
     password: 'contractor123',
   },
   {
+    email: 'dave@contractor.test',
+    name: 'Dave Contractor',
+    role: 'CONTRACTOR',
+    password: 'contractor123',
+  },
+  {
     email: 'bob@homeowner.test',
     name: 'Bob Homeowner',
     role: 'HOMEOWNER',

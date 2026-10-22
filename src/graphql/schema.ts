@@ -1,5 +1,6 @@
 import '../modules/users/users.graphql.js';
 import '../modules/auth/auth.graphql.js';
+import '../modules/jobs/jobs.graphql.js';
 
 import { builder } from './builder.js';
 

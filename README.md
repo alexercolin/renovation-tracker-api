@@ -24,17 +24,49 @@ A 15-minute walkthrough of the architecture, the main decisions and a live demo:
 
 One package, two processes, one composition root.
 
+```mermaid
+flowchart LR
+  classDef person fill:#08427B,stroke:#052E56,color:#FFFFFF
+  classDef process fill:#438DD5,stroke:#2E6295,color:#FFFFFF
+  classDef database fill:#1D4ED8,stroke:#1E3A8A,color:#FFFFFF
+  classDef queue fill:#15803D,stroke:#14532D,color:#FFFFFF
+  classDef pubsub fill:#DC2626,stroke:#991B1B,color:#FFFFFF
+  classDef bucket fill:#4B5563,stroke:#1F2937,color:#FFFFFF
+
+  contractor["<b>Contractor</b>"]:::person
+  homeowner["<b>Homeowner</b>"]:::person
+
+  subgraph system["renovation-tracker-api: one image, two processes"]
+    direction TB
+    api["<b>API</b><br/>GraphQL server<br/>HTTP + WebSocket"]:::process
+    worker["<b>Worker</b><br/>report generator"]:::process
+  end
+
+  s3[("<b>S3: reports</b><br/>generated PDFs")]:::bucket
+  sqs[["<b>reports queue</b><br/>+ reports-dlq after 3 failures"]]:::queue
+  postgres[("<b>renovation-db</b><br/>PostgreSQL")]:::database
+  redis["<b>Redis Pub/Sub</b><br/>messaging + report status"]:::pubsub
+
+  contractor -- "CRUD, undo/redo, requestReport<br/>[GraphQL over HTTP]" --> api
+  homeowner -- "queries + sendMessage<br/>[GraphQL over HTTP]" --> api
+  contractor <-- "WebSocket: messageAdded, reportUpdated" --> api
+  homeowner <-- "WebSocket: messageAdded" --> api
+  contractor -. "download report<br/>[presigned URL, 15 min]" .-> s3
+
+  api -- "jobs, messages, reports, users, history" --> postgres
+  api -- "publish a report<br/>[SendMessage]" --> sqs
+  api <-- "pub messageAdded<br/>sub messageAdded + reportUpdated" --> redis
+
+  worker -- "long polling<br/>[ReceiveMessage / DeleteMessage]" --> sqs
+  worker -- "read job, history, messages<br/>update reports.status" --> postgres
+  worker -- "upload PDF<br/>[multipart]" --> s3
+  worker -- "pub reportUpdated" --> redis
+
+  style system fill:transparent,stroke:#666666,stroke-dasharray:6 4
 ```
-client ── HTTP / WebSocket ──▶ api: Fastify + GraphQL Yoga (+ graphql-ws)
-                                 │  Pothos schema (modules/*/*.graphql.ts): arguments in, service call, result out
-                                 ▼
-                               services: validation, business rules, transactions, ownership checks
-                                 │                                  │
-                                 ▼                                  ▼
-                               repositories: Drizzle ──▶ PostgreSQL  Redis PubSub ──▶ subscriptions
-                                 │                                  ▲
-   requestReport ────────────────┴──▶ SQS ──▶ worker (same container) ──▶ PDF ──▶ S3
-```
+
+Every arrow into Redis is a publish or a subscribe, and every arrow out of it ends at the API,
+never at a user: Redis carries notifications with ids, Postgres holds the state.
 
 - **Request path.** A GraphQL field never holds logic: it reads its arguments, calls a service and
   returns the result. Services validate input with zod, open transactions, lock rows and check
@@ -334,6 +366,9 @@ no-comments-in-code rule and the module boundaries.
 ## Project layout
 
 ```
+docs/
+  decisions.md    Decision log: context, alternatives, consequences
+  examples.graphql
 src/
   api.ts          HTTP entrypoint (Fastify + Yoga)
   worker.ts       Queue consumer entrypoint
@@ -352,7 +387,6 @@ src/
   infra/pubsub/   Redis-backed PubSub for subscriptions, with an in-memory twin
   shared/         Cross-cutting helpers (errors, ids)
 tests/            Integration tests against real Postgres and LocalStack
-docs/             GraphQL examples and design notes
 ```
 
 ## Assumptions, risks and tradeoffs

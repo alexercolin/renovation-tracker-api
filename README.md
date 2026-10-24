@@ -152,6 +152,15 @@ Every request goes to `POST /graphql`. Authenticated calls send the JWT returned
 `Authorization: Bearer <token>`. `docs/examples.graphql` collects every query and mutation
 ready to paste into GraphiQL.
 
+For a guided run, import `docs/renovation-tracker-api.postman_collection.json` into Postman
+(or Insomnia and Bruno, which read the same format). The collection is ordered as a walkthrough:
+folder 1 logs in as Alice, Dave and Bob and saves the tokens; folders 2 to 7 create a job, edit
+it with optimistic locking, chat, undo and redo, request a report, exercise access control and
+finish with soft delete and restore, each request saving the ids and cursors the next one needs;
+folder 8 streams the subscriptions over Server-Sent Events. Requests whose name ends with an
+error code are expected to fail with it, and every request carries tests that assert the
+outcome, so the whole collection can be run with the Collection Runner.
+
 ```bash
 curl -s http://localhost:4000/graphql -H 'content-type: application/json' -d '{
   "query": "mutation { login(email: \"alice@contractor.test\", password: \"contractor123\") { token user { name role } } }"
@@ -369,6 +378,7 @@ no-comments-in-code rule and the module boundaries.
 docs/
   decisions.md    Decision log: context, alternatives, consequences
   examples.graphql
+  renovation-tracker-api.postman_collection.json
 src/
   api.ts          HTTP entrypoint (Fastify + Yoga)
   worker.ts       Queue consumer entrypoint

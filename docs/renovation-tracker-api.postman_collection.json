@@ -1,0 +1,2102 @@
+{
+  "info": {
+    "name": "Renovation Tracker API",
+    "description": "Every workflow of the Renovation Project Tracker backend, ordered for a walkthrough.\n\n**Setup**: `docker compose up -d`, `pnpm db:migrate`, `pnpm db:seed`, `pnpm dev` and `pnpm dev:worker`. The collection targets `{{baseUrl}}` (default http://localhost:4000).\n\n**Order**: run folder 1 (the three logins) first; they save the tokens. Then folders 2 to 7 in order: each request saves the ids and cursors the next ones need (jobId, jobVersion, messageCursor, reportId, downloadUrl). Folder 8 streams subscriptions over SSE.\n\n**Auth**: the collection sends Alice's token by default. Requests that act as Bob (homeowner) or Dave (another contractor) override the token; the ones expected to fail without a token use no auth.\n\n**Errors**: the API answers standard GraphQL errors with a stable `extensions.code`: UNAUTHENTICATED, FORBIDDEN, NOT_FOUND, CONFLICT, VALIDATION. Requests whose name ends with a code in parentheses are expected to fail with it, and their tests assert it.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{contractorToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "if (!pm.collectionVariables.get(\"baseUrl\")) pm.collectionVariables.set(\"baseUrl\", \"http://localhost:4000\");",
+          "if (!pm.collectionVariables.get(\"jobVersion\")) pm.collectionVariables.set(\"jobVersion\", \"1\");",
+          "if (!pm.collectionVariables.get(\"clientMessageId\")) pm.collectionVariables.set(\"clientMessageId\", \"019a0000-0000-7000-8000-0000000000ff\");",
+          "const body = pm.request.body;",
+          "if (body && body.mode === \"graphql\" && body.graphql && body.graphql.variables) {",
+          "  const resolved = pm.variables.replaceIn(body.graphql.variables);",
+          "  body.graphql.variables = resolved.replace(/\"expectedVersion\":\\s*\"(\\d+)\"/g, '\"expectedVersion\": $1');",
+          "}"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:4000"
+    },
+    {
+      "key": "contractorToken",
+      "value": ""
+    },
+    {
+      "key": "otherContractorToken",
+      "value": ""
+    },
+    {
+      "key": "homeownerToken",
+      "value": ""
+    },
+    {
+      "key": "contractorId",
+      "value": ""
+    },
+    {
+      "key": "homeownerId",
+      "value": ""
+    },
+    {
+      "key": "jobId",
+      "value": ""
+    },
+    {
+      "key": "jobVersion",
+      "value": "1"
+    },
+    {
+      "key": "messageCursor",
+      "value": ""
+    },
+    {
+      "key": "clientMessageId",
+      "value": "019a0000-0000-7000-8000-0000000000ff"
+    },
+    {
+      "key": "lastClientMessageDbId",
+      "value": ""
+    },
+    {
+      "key": "reportId",
+      "value": ""
+    },
+    {
+      "key": "downloadUrl",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "0. Health",
+      "description": "Liveness of the GraphQL layer. No token needed.",
+      "item": [
+        {
+          "name": "Health",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query { health }",
+                "variables": ""
+              }
+            },
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"no GraphQL errors\", () => pm.expect(body.errors, JSON.stringify(body.errors)).to.be.undefined);",
+                  "pm.test(\"health is ok\", () => pm.expect(body.data.health).to.eql(\"ok\"));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "1. Auth",
+      "description": "Run the three logins first. Tokens and user ids are saved into collection variables and reused by every other request.",
+      "item": [
+        {
+          "name": "Login as Alice (contractor)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation Login($email: String!, $password: String!) { login(email: $email, password: $password) { token user { id name role } } }",
+                "variables": "{\n  \"email\": \"alice@contractor.test\",\n  \"password\": \"contractor123\"\n}"
+              }
+            },
+            "description": "Saves contractorToken and contractorId.",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"no GraphQL errors\", () => pm.expect(body.errors, JSON.stringify(body.errors)).to.be.undefined);",
+                  "pm.collectionVariables.set(\"contractorToken\", body.data.login.token);",
+                  "pm.collectionVariables.set(\"contractorId\", body.data.login.user.id);",
+                  "pm.test(\"role is CONTRACTOR\", () => pm.expect(body.data.login.user.role).to.eql(\"CONTRACTOR\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login as Dave (another contractor)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation Login($email: String!, $password: String!) { login(email: $email, password: $password) { token user { id name role } } }",
+                "variables": "{\n  \"email\": \"dave@contractor.test\",\n  \"password\": \"contractor123\"\n}"
+              }
+            },
+            "description": "Dave owns nothing. Used by the access-control folder to show isolation between contractors.",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"no GraphQL errors\", () => pm.expect(body.errors, JSON.stringify(body.errors)).to.be.undefined);",
+                  "pm.collectionVariables.set(\"otherContractorToken\", body.data.login.token);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login as Bob (homeowner)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation Login($email: String!, $password: String!) { login(email: $email, password: $password) { token user { id name role } } }",
+                "variables": "{\n  \"email\": \"bob@homeowner.test\",\n  \"password\": \"homeowner123\"\n}"
+              }
+            },
+            "description": "Saves homeownerToken and homeownerId.",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"no GraphQL errors\", () => pm.expect(body.errors, JSON.stringify(body.errors)).to.be.undefined);",
+                  "pm.collectionVariables.set(\"homeownerToken\", body.data.login.token);",
+                  "pm.collectionVariables.set(\"homeownerId\", body.data.login.user.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Me",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query { me { id email name role } }",
+                "variables": ""
+              }
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"no GraphQL errors\", () => pm.expect(body.errors, JSON.stringify(body.errors)).to.be.undefined);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login with a wrong password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation { login(email: \"alice@contractor.test\", password: \"wrong\") { token } }",
+                "variables": ""
+              }
+            },
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"data is null\", () => pm.expect(body.data).to.be.null);",
+                  "pm.test(\"error code is UNAUTHENTICATED\", () => pm.expect(body.errors[0].extensions.code).to.eql(\"UNAUTHENTICATED\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Me without a token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query { me { id } }",
+                "variables": ""
+              }
+            },
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"data is null\", () => pm.expect(body.data).to.be.null);",
+                  "pm.test(\"error code is UNAUTHENTICATED\", () => pm.expect(body.errors[0].extensions.code).to.eql(\"UNAUTHENTICATED\"));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2. Jobs",
+      "description": "Create a job as Alice, then edit it with optimistic locking and share it with Bob. jobId and jobVersion are saved for the following requests.",
+      "item": [
+        {
+          "name": "Create job",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation CreateJob($input: CreateJobInput!) { createJob(input: $input) { id description status costCents version deletedAt canUndo canRedo location { addressLine1 addressLine2 city state postalCode country } contractor { name } homeowners { id name email } } }",
+                "variables": "{\n  \"input\": {\n    \"description\": \"Kitchen remodel\",\n    \"location\": {\n      \"addressLine1\": \"1 Main St\",\n      \"addressLine2\": \"Unit 4\",\n      \"city\": \"Austin\",\n      \"state\": \"TX\",\n      \"postalCode\": \"78701\"\n    },\n    \"costCents\": 2500000\n  }\n}"
+              }
+            },
+            "description": "Defaults applied by the server: status PLANNING, country US, version 1. Saves jobId and jobVersion."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"no GraphQL errors\", () => pm.expect(body.errors, JSON.stringify(body.errors)).to.be.undefined);",
+                  "pm.collectionVariables.set(\"jobId\", body.data.createJob.id);",
+                  "pm.collectionVariables.set(\"jobVersion\", String(body.data.createJob.version));",
+                  "pm.test(\"starts in PLANNING at version 1\", () => { pm.expect(body.data.createJob.status).to.eql(\"PLANNING\"); pm.expect(body.data.createJob.version).to.eql(1); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List my jobs",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query { jobs { id description status costCents version deletedAt canUndo canRedo location { addressLine1 addressLine2 city state postalCode country } contractor { name } homeowners { id name email } } }",
+                "variables": ""
+              }
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"no GraphQL errors\", () => pm.expect(body.errors, JSON.stringify(body.errors)).to.be.undefined);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get job",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query Job($id: ID!) { job(id: $id) { id description status costCents version deletedAt canUndo canRedo location { addressLine1 addressLine2 city state postalCode country } contractor { name } homeowners { id name email } } }",
+                "variables": "{\n  \"id\": \"{{jobId}}\"\n}"
+              }
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"no GraphQL errors\", () => pm.expect(body.errors, JSON.stringify(body.errors)).to.be.undefined);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update job (with expectedVersion)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation UpdateJob($id: ID!, $input: UpdateJobInput!) { updateJob(id: $id, input: $input) { id description status costCents version deletedAt canUndo canRedo location { addressLine1 addressLine2 city state postalCode country } contractor { name } homeowners { id name email } } }",
+                "variables": "{\n  \"id\": \"{{jobId}}\",\n  \"input\": {\n    \"status\": \"IN_PROGRESS\",\n    \"costCents\": 2750000,\n    \"expectedVersion\": \"{{jobVersion}}\"\n  }\n}"
+              }
+            },
+            "description": "expectedVersion is the version last read. The pre-request script turns the saved string into a number. Saves the new jobVersion."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"no GraphQL errors\", () => pm.expect(body.errors, JSON.stringify(body.errors)).to.be.undefined);",
+                  "pm.collectionVariables.set(\"jobVersion\", String(body.data.updateJob.version));",
+                  "pm.test(\"version incremented\", () => pm.expect(body.data.updateJob.version).to.be.above(1));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update job with a stale version (CONFLICT)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation UpdateJob($id: ID!, $input: UpdateJobInput!) { updateJob(id: $id, input: $input) { id version } }",
+                "variables": "{\n  \"id\": \"{{jobId}}\",\n  \"input\": {\n    \"costCents\": 1,\n    \"expectedVersion\": 1\n  }\n}"
+              }
+            },
+            "description": "Run after the first update. The error carries expectedVersion and currentVersion."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"data is null\", () => pm.expect(body.data).to.be.null);",
+                  "pm.test(\"error code is CONFLICT\", () => pm.expect(body.errors[0].extensions.code).to.eql(\"CONFLICT\"));",
+                  "pm.test(\"reports both versions\", () => { pm.expect(body.errors[0].extensions).to.have.property(\"expectedVersion\"); pm.expect(body.errors[0].extensions).to.have.property(\"currentVersion\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update job with nothing to change (VALIDATION)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation UpdateJob($id: ID!, $input: UpdateJobInput!) { updateJob(id: $id, input: $input) { id } }",
+                "variables": "{\n  \"id\": \"{{jobId}}\",\n  \"input\": {\n    \"expectedVersion\": \"{{jobVersion}}\"\n  }\n}"
+              }
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"data is null\", () => pm.expect(body.data).to.be.null);",
+                  "pm.test(\"error code is VALIDATION\", () => pm.expect(body.errors[0].extensions.code).to.eql(\"VALIDATION\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Add homeowner by email",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation AddHomeowner($jobId: ID!, $email: String!) { addHomeowner(jobId: $jobId, email: $email) { id homeowners { id name email } } }",
+                "variables": "{\n  \"jobId\": \"{{jobId}}\",\n  \"email\": \"bob@homeowner.test\"\n}"
+              }
+            },
+            "description": "Idempotent: running it twice is a no-op. Adding a contractor email is a VALIDATION error, an unknown email is NOT_FOUND."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"no GraphQL errors\", () => pm.expect(body.errors, JSON.stringify(body.errors)).to.be.undefined);",
+                  "pm.test(\"Bob is a homeowner of the job\", () => pm.expect(body.data.addHomeowner.homeowners.map(h => h.email)).to.include(\"bob@homeowner.test\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Add a contractor as homeowner (VALIDATION)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation AddHomeowner($jobId: ID!, $email: String!) { addHomeowner(jobId: $jobId, email: $email) { id } }",
+                "variables": "{\n  \"jobId\": \"{{jobId}}\",\n  \"email\": \"dave@contractor.test\"\n}"
+              }
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"data is null\", () => pm.expect(body.data).to.be.null);",
+                  "pm.test(\"error code is VALIDATION\", () => pm.expect(body.errors[0].extensions.code).to.eql(\"VALIDATION\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Jobs as Bob (homeowner view)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query { jobs { id description status costCents contractor { name } } }",
+                "variables": ""
+              }
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{homeownerToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"no GraphQL errors\", () => pm.expect(body.errors, JSON.stringify(body.errors)).to.be.undefined);",
+                  "pm.test(\"Bob sees the shared job\", () => pm.expect(body.data.jobs.map(j => j.id)).to.include(pm.collectionVariables.get(\"jobId\")));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3. Messages",
+      "description": "The chat log between Alice and Bob. Keyset cursors keep pages stable while new messages arrive.",
+      "item": [
+        {
+          "name": "Send message as Alice",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation SendMessage($jobId: ID!, $body: String!) { sendMessage(jobId: $jobId, body: $body) { id body createdAt sender { name role } } }",
+                "variables": "{\n  \"jobId\": \"{{jobId}}\",\n  \"body\": \"Demolition starts Monday.\"\n}"
+              }
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"no GraphQL errors\", () => pm.expect(body.errors, JSON.stringify(body.errors)).to.be.undefined);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Send message as Bob",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation SendMessage($jobId: ID!, $body: String!) { sendMessage(jobId: $jobId, body: $body) { id body createdAt sender { name role } } }",
+                "variables": "{\n  \"jobId\": \"{{jobId}}\",\n  \"body\": \"Great, thanks! Should we move the fridge?\"\n}"
+              }
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{homeownerToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"no GraphQL errors\", () => pm.expect(body.errors, JSON.stringify(body.errors)).to.be.undefined);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Send message with clientMessageId (run twice)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation SendMessage($jobId: ID!, $body: String!, $clientMessageId: ID) { sendMessage(jobId: $jobId, body: $body, clientMessageId: $clientMessageId) { id body clientMessageId } }",
+                "variables": "{\n  \"jobId\": \"{{jobId}}\",\n  \"body\": \"Yes, to the garage please.\",\n  \"clientMessageId\": \"{{clientMessageId}}\"\n}"
+              }
+            },
+            "description": "Run it twice: the second run returns the same message id instead of creating a duplicate. The test compares with the previous run."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"no GraphQL errors\", () => pm.expect(body.errors, JSON.stringify(body.errors)).to.be.undefined);",
+                  "const previous = pm.collectionVariables.get(\"lastClientMessageDbId\");",
+                  "if (previous) pm.test(\"retry returned the same message\", () => pm.expect(body.data.sendMessage.id).to.eql(previous));",
+                  "pm.collectionVariables.set(\"lastClientMessageDbId\", body.data.sendMessage.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Messages, first page",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query Messages($jobId: ID!, $first: Int) { job(id: $jobId) { messages(first: $first) { edges { cursor node { id body createdAt sender { name } } } pageInfo { hasNextPage endCursor } } } }",
+                "variables": "{\n  \"jobId\": \"{{jobId}}\",\n  \"first\": 2\n}"
+              }
+            },
+            "description": "Saves messageCursor from pageInfo.endCursor."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"no GraphQL errors\", () => pm.expect(body.errors, JSON.stringify(body.errors)).to.be.undefined);",
+                  "pm.collectionVariables.set(\"messageCursor\", body.data.job.messages.pageInfo.endCursor);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Messages, next page",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query Messages($jobId: ID!, $first: Int, $after: String) { job(id: $jobId) { messages(first: $first, after: $after) { edges { node { body sender { name } } } pageInfo { hasNextPage endCursor } } } }",
+                "variables": "{\n  \"jobId\": \"{{jobId}}\",\n  \"first\": 2,\n  \"after\": \"{{messageCursor}}\"\n}"
+              }
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"no GraphQL errors\", () => pm.expect(body.errors, JSON.stringify(body.errors)).to.be.undefined);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Latest messages (backward)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query Latest($jobId: ID!) { job(id: $jobId) { messages(last: 20) { edges { node { body createdAt sender { name } } } pageInfo { hasPreviousPage startCursor } } } }",
+                "variables": "{\n  \"jobId\": \"{{jobId}}\"\n}"
+              }
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"no GraphQL errors\", () => pm.expect(body.errors, JSON.stringify(body.errors)).to.be.undefined);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Page too large (VALIDATION)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query Messages($jobId: ID!) { job(id: $jobId) { messages(first: 500) { edges { node { id } } } } }",
+                "variables": "{\n  \"jobId\": \"{{jobId}}\"\n}"
+              }
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"data is null\", () => pm.expect(body.data).to.be.null);",
+                  "pm.test(\"error code is VALIDATION\", () => pm.expect(body.errors[0].extensions.code).to.eql(\"VALIDATION\"));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4. History, undo and redo",
+      "description": "Every change is an append-only entry. Undo and redo are linear and contractor-only; homeowners read the timeline.",
+      "item": [
+        {
+          "name": "Timeline",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query History($jobId: ID!) { job(id: $jobId) { version canUndo canRedo history(first: 50) { edges { cursor node { seq kind targetSeq supersededAt createdAt actor { name } changes { field before after } } } pageInfo { hasNextPage endCursor } } } }",
+                "variables": "{\n  \"jobId\": \"{{jobId}}\"\n}"
+              }
+            },
+            "description": "Expect CREATED, HOMEOWNER_ADDED and the UPDATED entries, each with before/after per field."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"no GraphQL errors\", () => pm.expect(body.errors, JSON.stringify(body.errors)).to.be.undefined);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Undo last change",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation Undo($jobId: ID!) { undoJobChange(jobId: $jobId) { id description status costCents version deletedAt canUndo canRedo location { addressLine1 addressLine2 city state postalCode country } contractor { name } homeowners { id name email } } }",
+                "variables": "{\n  \"jobId\": \"{{jobId}}\"\n}"
+              }
+            },
+            "description": "Reverts the most recent applied change and bumps the version. Check the timeline afterwards: a new UNDONE entry points at what it reverted."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"no GraphQL errors\", () => pm.expect(body.errors, JSON.stringify(body.errors)).to.be.undefined);",
+                  "pm.collectionVariables.set(\"jobVersion\", String(body.data.undoJobChange.version));",
+                  "pm.test(\"redo is now available\", () => pm.expect(body.data.undoJobChange.canRedo).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Redo",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation Redo($jobId: ID!) { redoJobChange(jobId: $jobId) { id description status costCents version deletedAt canUndo canRedo location { addressLine1 addressLine2 city state postalCode country } contractor { name } homeowners { id name email } } }",
+                "variables": "{\n  \"jobId\": \"{{jobId}}\"\n}"
+              }
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"no GraphQL errors\", () => pm.expect(body.errors, JSON.stringify(body.errors)).to.be.undefined);",
+                  "pm.collectionVariables.set(\"jobVersion\", String(body.data.redoJobChange.version));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Undo with expectedVersion",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation Undo($jobId: ID!, $expectedVersion: Int) { undoJobChange(jobId: $jobId, expectedVersion: $expectedVersion) { id version canUndo canRedo } }",
+                "variables": "{\n  \"jobId\": \"{{jobId}}\",\n  \"expectedVersion\": \"{{jobVersion}}\"\n}"
+              }
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"no GraphQL errors\", () => pm.expect(body.errors, JSON.stringify(body.errors)).to.be.undefined);",
+                  "pm.collectionVariables.set(\"jobVersion\", String(body.data.undoJobChange.version));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Edit after undo (supersedes the redo stack)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation UpdateJob($id: ID!, $input: UpdateJobInput!) { updateJob(id: $id, input: $input) { id costCents version canUndo canRedo } }",
+                "variables": "{\n  \"id\": \"{{jobId}}\",\n  \"input\": {\n    \"costCents\": 3000000\n  }\n}"
+              }
+            },
+            "description": "Afterwards the timeline shows the discarded entry with supersededAt set. Nothing is deleted."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"no GraphQL errors\", () => pm.expect(body.errors, JSON.stringify(body.errors)).to.be.undefined);",
+                  "pm.collectionVariables.set(\"jobVersion\", String(body.data.updateJob.version));",
+                  "pm.test(\"redo stack discarded\", () => pm.expect(body.data.updateJob.canRedo).to.be.false);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Redo with nothing to redo (CONFLICT)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation Redo($jobId: ID!) { redoJobChange(jobId: $jobId) { id } }",
+                "variables": "{\n  \"jobId\": \"{{jobId}}\"\n}"
+              }
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"data is null\", () => pm.expect(body.data).to.be.null);",
+                  "pm.test(\"error code is CONFLICT\", () => pm.expect(body.errors[0].extensions.code).to.eql(\"CONFLICT\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Timeline as Bob (read-only)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query History($jobId: ID!) { job(id: $jobId) { history(first: 50) { edges { node { seq kind actor { name } changes { field before after } } } } } }",
+                "variables": "{\n  \"jobId\": \"{{jobId}}\"\n}"
+              }
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{homeownerToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"no GraphQL errors\", () => pm.expect(body.errors, JSON.stringify(body.errors)).to.be.undefined);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Undo as Bob (FORBIDDEN)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation Undo($jobId: ID!) { undoJobChange(jobId: $jobId) { id } }",
+                "variables": "{\n  \"jobId\": \"{{jobId}}\"\n}"
+              }
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{homeownerToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"data is null\", () => pm.expect(body.data).to.be.null);",
+                  "pm.test(\"error code is FORBIDDEN\", () => pm.expect(body.errors[0].extensions.code).to.eql(\"FORBIDDEN\"));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "5. Reports",
+      "description": "Asynchronous PDF export: request, poll until COMPLETED, download through the presigned URL. The worker must be running.",
+      "item": [
+        {
+          "name": "Request report",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation RequestReport($jobId: ID!) { requestReport(jobId: $jobId) { id status attempts createdAt } }",
+                "variables": "{\n  \"jobId\": \"{{jobId}}\"\n}"
+              }
+            },
+            "description": "Saves reportId."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"no GraphQL errors\", () => pm.expect(body.errors, JSON.stringify(body.errors)).to.be.undefined);",
+                  "pm.collectionVariables.set(\"reportId\", body.data.requestReport.id);",
+                  "pm.test(\"queued as PENDING\", () => pm.expect(body.data.requestReport.status).to.eql(\"PENDING\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get report (poll until COMPLETED)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query Report($id: ID!) { report(id: $id) { id status attempts error downloadUrl startedAt completedAt job { id description } requestedBy { name } } }",
+                "variables": "{\n  \"id\": \"{{reportId}}\"\n}"
+              }
+            },
+            "description": "Run again until status is COMPLETED. Saves downloadUrl, a presigned S3 link valid for 15 minutes."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"no GraphQL errors\", () => pm.expect(body.errors, JSON.stringify(body.errors)).to.be.undefined);",
+                  "const report = body.data.report;",
+                  "console.log(\"report status:\", report.status);",
+                  "if (report.downloadUrl) pm.collectionVariables.set(\"downloadUrl\", report.downloadUrl);",
+                  "pm.test(\"status is a known value\", () => pm.expect([\"PENDING\", \"PROCESSING\", \"COMPLETED\", \"FAILED\"]).to.include(report.status));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Download PDF",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{downloadUrl}}",
+              "host": ["{{downloadUrl}}"]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "description": "Opens the presigned URL saved by the previous request. In Postman use Send and Download to save the file, or paste the URL in a browser."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"is a PDF\", () => pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"application/pdf\"));"
+                ]
+              }
+            }
+          ],
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "6. Access control",
+      "description": "What other users see. Anything invisible answers NOT_FOUND; a role mismatch answers FORBIDDEN.",
+      "item": [
+        {
+          "name": "Get job as Dave (NOT_FOUND)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query Job($id: ID!) { job(id: $id) { id } }",
+                "variables": "{\n  \"id\": \"{{jobId}}\"\n}"
+              }
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{otherContractorToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"data is null\", () => pm.expect(body.data).to.be.null);",
+                  "pm.test(\"error code is NOT_FOUND\", () => pm.expect(body.errors[0].extensions.code).to.eql(\"NOT_FOUND\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Jobs as Dave (empty)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query { jobs { id } }",
+                "variables": ""
+              }
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{otherContractorToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"no GraphQL errors\", () => pm.expect(body.errors, JSON.stringify(body.errors)).to.be.undefined);",
+                  "pm.test(\"Dave sees no jobs\", () => pm.expect(body.data.jobs).to.eql([]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update job as Bob (FORBIDDEN)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation UpdateJob($id: ID!, $input: UpdateJobInput!) { updateJob(id: $id, input: $input) { id } }",
+                "variables": "{\n  \"id\": \"{{jobId}}\",\n  \"input\": {\n    \"costCents\": 1\n  }\n}"
+              }
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{homeownerToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"data is null\", () => pm.expect(body.data).to.be.null);",
+                  "pm.test(\"error code is FORBIDDEN\", () => pm.expect(body.errors[0].extensions.code).to.eql(\"FORBIDDEN\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Request report as Bob (FORBIDDEN)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation RequestReport($jobId: ID!) { requestReport(jobId: $jobId) { id } }",
+                "variables": "{\n  \"jobId\": \"{{jobId}}\"\n}"
+              }
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{homeownerToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"data is null\", () => pm.expect(body.data).to.be.null);",
+                  "pm.test(\"error code is FORBIDDEN\", () => pm.expect(body.errors[0].extensions.code).to.eql(\"FORBIDDEN\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Report as Dave (NOT_FOUND)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query Report($id: ID!) { report(id: $id) { id } }",
+                "variables": "{\n  \"id\": \"{{reportId}}\"\n}"
+              }
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{otherContractorToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"data is null\", () => pm.expect(body.data).to.be.null);",
+                  "pm.test(\"error code is NOT_FOUND\", () => pm.expect(body.errors[0].extensions.code).to.eql(\"NOT_FOUND\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Malformed id (VALIDATION)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query { job(id: \"not-a-uuid\") { id } }",
+                "variables": ""
+              }
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"data is null\", () => pm.expect(body.data).to.be.null);",
+                  "pm.test(\"error code is VALIDATION\", () => pm.expect(body.errors[0].extensions.code).to.eql(\"VALIDATION\"));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "7. Soft delete and restore",
+      "description": "Deleting freezes the job and hides it from lists; undo brings it back.",
+      "item": [
+        {
+          "name": "Remove homeowner Bob",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation RemoveHomeowner($jobId: ID!, $homeownerId: ID!) { removeHomeowner(jobId: $jobId, homeownerId: $homeownerId) { id homeowners { email } } }",
+                "variables": "{\n  \"jobId\": \"{{jobId}}\",\n  \"homeownerId\": \"{{homeownerId}}\"\n}"
+              }
+            },
+            "description": "Idempotent. Afterwards Bob gets NOT_FOUND for this job."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"no GraphQL errors\", () => pm.expect(body.errors, JSON.stringify(body.errors)).to.be.undefined);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Delete job",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation DeleteJob($id: ID!, $expectedVersion: Int) { deleteJob(id: $id, expectedVersion: $expectedVersion) { id deletedAt version canUndo } }",
+                "variables": "{\n  \"id\": \"{{jobId}}\",\n  \"expectedVersion\": \"{{jobVersion}}\"\n}"
+              }
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"no GraphQL errors\", () => pm.expect(body.errors, JSON.stringify(body.errors)).to.be.undefined);",
+                  "pm.collectionVariables.set(\"jobVersion\", String(body.data.deleteJob.version));",
+                  "pm.test(\"deletedAt is set\", () => pm.expect(body.data.deleteJob.deletedAt).to.not.be.null);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update a deleted job (CONFLICT)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation UpdateJob($id: ID!, $input: UpdateJobInput!) { updateJob(id: $id, input: $input) { id } }",
+                "variables": "{\n  \"id\": \"{{jobId}}\",\n  \"input\": {\n    \"costCents\": 1\n  }\n}"
+              }
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"data is null\", () => pm.expect(body.data).to.be.null);",
+                  "pm.test(\"error code is CONFLICT\", () => pm.expect(body.errors[0].extensions.code).to.eql(\"CONFLICT\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List jobs (deleted hidden)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query { jobs { id description deletedAt } }",
+                "variables": ""
+              }
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"no GraphQL errors\", () => pm.expect(body.errors, JSON.stringify(body.errors)).to.be.undefined);",
+                  "pm.test(\"deleted job is hidden\", () => pm.expect(body.data.jobs.map(j => j.id)).to.not.include(pm.collectionVariables.get(\"jobId\")));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List jobs including deleted",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query { jobs(includeDeleted: true) { id description deletedAt } }",
+                "variables": ""
+              }
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"no GraphQL errors\", () => pm.expect(body.errors, JSON.stringify(body.errors)).to.be.undefined);",
+                  "pm.test(\"deleted job is listed\", () => pm.expect(body.data.jobs.map(j => j.id)).to.include(pm.collectionVariables.get(\"jobId\")));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Undo the deletion (restore)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"]
+            },
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation Undo($jobId: ID!) { undoJobChange(jobId: $jobId) { id deletedAt version canUndo canRedo } }",
+                "variables": "{\n  \"jobId\": \"{{jobId}}\"\n}"
+              }
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"no GraphQL errors\", () => pm.expect(body.errors, JSON.stringify(body.errors)).to.be.undefined);",
+                  "pm.collectionVariables.set(\"jobVersion\", String(body.data.undoJobChange.version));",
+                  "pm.test(\"job restored\", () => pm.expect(body.data.undoJobChange.deletedAt).to.be.null);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "8. Real time",
+      "description": "GraphQL subscriptions. The WebSocket transport (graphql-ws) is what clients use; Postman can stream the same subscription over Server-Sent Events with a GET request.",
+      "item": [
+        {
+          "name": "messageAdded over SSE (as Bob)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "text/event-stream"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql?query=subscription { messageAdded(jobId: \"{{jobId}}\") { body createdAt sender { name } } }",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"],
+              "query": [
+                {
+                  "key": "query",
+                  "value": "subscription { messageAdded(jobId: \"{{jobId}}\") { body createdAt sender { name } } }"
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{homeownerToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Send this request and keep it open; Postman shows each event as it arrives. Then run \"Send message as Alice\" from folder 3 in another tab. Bob must be a homeowner of the job.\n\nFor WebSocket, use Postman's GraphQL request type (New > GraphQL) or GraphiQL at {{baseUrl}}/graphql with the connection params {\"authorization\": \"Bearer <token>\"}."
+          },
+          "response": []
+        },
+        {
+          "name": "reportUpdated over SSE (as Alice)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "text/event-stream"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/graphql?query=subscription { reportUpdated(reportId: \"{{reportId}}\") { status attempts downloadUrl } }",
+              "host": ["{{baseUrl}}"],
+              "path": ["graphql"],
+              "query": [
+                {
+                  "key": "query",
+                  "value": "subscription { reportUpdated(reportId: \"{{reportId}}\") { status attempts downloadUrl } }"
+                }
+              ]
+            },
+            "description": "Open right after \"Request report\" and watch PROCESSING and COMPLETED arrive from the worker through Redis."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

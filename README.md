@@ -11,8 +11,7 @@ messaging over GraphQL subscriptions.
 
 A 15-minute walkthrough of the architecture, the main decisions and a live demo:
 [watch it on Google Drive](https://drive.google.com/file/d/1aQMcSCyGoUzKuuJs6BizPTWZ0_sceWLE/view?usp=sharing).
-The Drive player often starts at 720p; switch it to 1080p in the settings gear so the code on
-screen stays readable.
+Set the player to 1080p for the best viewing experience.
 
 ## Stack
 

@@ -7,6 +7,11 @@ a full change history with undo/redo, and real-time messaging.
 Status: all features are complete, including job history with undo/redo and real-time
 messaging over GraphQL subscriptions.
 
+## Video walkthrough
+
+A 15-minute walkthrough of the architecture, the main decisions and a live demo:
+[watch it on Google Drive](https://drive.google.com/file/d/1aQMcSCyGoUzKuuJs6BizPTWZ0_sceWLE/view?usp=sharing).
+
 ## Stack
 
 - Node.js 22, TypeScript, pnpm
